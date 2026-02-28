@@ -6,6 +6,7 @@ import { useAppStore } from '@/store';
 import { useMessagesStore } from '@/messages/store';
 import { usePresenceStore } from '@/presence/store';
 import { usePresence } from '@/presence/hooks/usePresence';
+import { useCelebrationReactions } from '@/shared/hooks/useCelebrationReactions';
 
 /**
  * SocketProvider connects the Socket.IO client on mount and registers
@@ -33,6 +34,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   // Initialize presence heartbeats and activity detection
   usePresence();
 
+  // Initialize celebration reactions (confetti on 🎉 🎊 🥳 🏆 🚀 ✨)
+  useCelebrationReactions();
+
   useEffect(() => {
     const socket = getSocket();
 
@@ -49,27 +53,22 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const handleNewMessage = (message: import('@/shared/types').MessageWithMeta) => {
       // Skip thread replies — they are handled by the thread:reply handler
       if (message.parentId) return;
+      // Only update the app-level store here; useMessagesStore is updated by
+      // MessageList's own socket handlers to avoid double state mutations and
+      // double re-renders. Unread counts are authoritative from handleUnreadUpdate
+      // (server emits unread:update after every message:new), so no optimistic
+      // increment here.
       addMessage(message.channelId, message);
-      useMessagesStore.getState().addMessage(message.channelId, message);
-
-      // Increment unread count for channels that aren't the currently active channel
-      const store = useAppStore.getState();
-      const isOwnMessage = message.userId === store.user?.id;
-      const isActiveChannel = store.currentChannel?.id === message.channelId;
-      if (!isOwnMessage && !isActiveChannel) {
-        const currentCount = store.unreadCounts[message.channelId] ?? 0;
-        setUnreadCount(message.channelId, currentCount + 1);
-      }
     };
 
     const handleUpdatedMessage = (message: import('@/shared/types').MessageWithMeta) => {
+      // Only update useAppStore; MessageList handles useMessagesStore separately.
       updateMessage(message.channelId, message);
-      useMessagesStore.getState().updateMessage(message.channelId, message);
     };
 
     const handleDeletedMessage = (payload: { messageId: string; channelId: string }) => {
+      // Only update useAppStore; MessageList handles useMessagesStore separately.
       deleteMessage(payload.channelId, payload.messageId);
-      useMessagesStore.getState().deleteMessage(payload.channelId, payload.messageId);
     };
 
     const handleThreadReply = (message: import('@/shared/types').MessageWithMeta) => {

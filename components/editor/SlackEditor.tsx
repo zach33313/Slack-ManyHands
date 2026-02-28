@@ -25,6 +25,12 @@ interface SlackEditorProps {
   disabled?: boolean
   workspaceId: string
   onFileUpload?: (files: File[]) => void
+  /** Called with (contentJson, contentPlain) for schedule button */
+  onScheduleClick?: (contentJson: TiptapJSON, contentPlain: string) => void
+  /** Called when GIF button is clicked */
+  onGifClick?: () => void
+  /** Extra toolbar elements rendered on the right side */
+  extraToolbarButtons?: React.ReactNode
 }
 
 /**
@@ -56,6 +62,9 @@ export default function SlackEditor({
   disabled = false,
   workspaceId,
   onFileUpload,
+  onScheduleClick,
+  onGifClick,
+  extraToolbarButtons,
 }: SlackEditorProps) {
   // Use ref so the submit handler always has the latest callback
   // without requiring extension recreation
@@ -179,6 +188,16 @@ export default function SlackEditor({
     input.click()
   }, [])
 
+  /** Triggered by the SendButton in the toolbar — mimics pressing Enter */
+  const handleSendClick = useCallback(() => {
+    if (!editor) return
+    const text = editor.getText()
+    if (!text.trim()) return
+    const json = editor.getJSON() as TiptapJSON
+    onSubmitRef.current(json, text)
+    editor.commands.clearContent()
+  }, [editor])
+
   return (
     <div
       className={cn(
@@ -195,6 +214,10 @@ export default function SlackEditor({
       <EditorToolbar
         editor={editor}
         onAttachmentClick={onFileUpload ? handleAttachmentClick : undefined}
+        onScheduleClick={onScheduleClick}
+        onGifClick={onGifClick}
+        extraRightButtons={extraToolbarButtons}
+        onSend={handleSendClick}
       />
 
       {/* Editor-specific styles */}

@@ -16,6 +16,16 @@ const config: Config = {
     './presence/**/*.{ts,tsx}',
     './auth/**/*.{ts,tsx}',
     './shared/**/*.{ts,tsx}',
+    './calls/**/*.{ts,tsx}',
+    './scheduling/**/*.{ts,tsx}',
+    './polls/**/*.{ts,tsx}',
+    './canvas/**/*.{ts,tsx}',
+    './gifs/**/*.{ts,tsx}',
+    './link-previews/**/*.{ts,tsx}',
+    './workflows/**/*.{ts,tsx}',
+    './admin/**/*.{ts,tsx}',
+    './bookmarks/**/*.{ts,tsx}',
+    './custom-emojis/**/*.{ts,tsx}',
   ],
   theme: {
     extend: {

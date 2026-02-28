@@ -36,21 +36,25 @@ type AppSocket = Socket<
 
 /**
  * In-memory presence tracker.
- * Maps userId → NodeJS.Timeout (the expiry timer).
- * When the timer fires, the user is considered offline.
+ * Maps userId → Map<socketId, NodeJS.Timeout>.
+ *
+ * Each connected socket (browser tab) has its own independent timer.
+ * A user is only considered offline when their LAST socket's timer expires
+ * or disconnects. This prevents a disconnect on one tab from marking a user
+ * offline while another tab is still active.
  */
-const presenceTimers = new Map<string, NodeJS.Timeout>();
+const presenceTimers = new Map<string, Map<string, NodeJS.Timeout>>();
 
 /**
  * Marks a user as offline: emits presence:update to their workspace room,
- * clears the timer, and updates lastSeenAt in the database.
+ * and updates lastSeenAt in the database.
+ *
+ * Callers are responsible for cleaning up presenceTimers before calling this.
  */
 async function markOffline(
   socket: AppSocket,
   userId: string
 ): Promise<void> {
-  presenceTimers.delete(userId);
-
   // Emit offline status to all workspace rooms this socket is in
   // The socket's rooms include workspace rooms (workspace:xxx)
   for (const room of socket.rooms) {
@@ -112,23 +116,37 @@ export function registerPresenceHandlers(socket: AppSocket): void {
    * to the workspace room.
    */
   socket.on('presence:heartbeat', () => {
-    const isFirstHeartbeat = !presenceTimers.has(userId);
+    let userTimers = presenceTimers.get(userId);
+    // First socket for this user — user is transitioning online
+    const isFirstSocket = !userTimers || userTimers.size === 0;
 
-    // Clear any existing timer
-    const existingTimer = presenceTimers.get(userId);
+    if (!userTimers) {
+      userTimers = new Map<string, NodeJS.Timeout>();
+      presenceTimers.set(userId, userTimers);
+    }
+
+    // Clear this socket's existing timer (if any)
+    const existingTimer = userTimers.get(socket.id);
     if (existingTimer) {
       clearTimeout(existingTimer);
     }
 
-    // Set a new expiry timer
+    // Set a new expiry timer scoped to this socket
     const timer = setTimeout(() => {
-      markOffline(socket, userId);
+      const timers = presenceTimers.get(userId);
+      if (timers) {
+        timers.delete(socket.id);
+        if (timers.size === 0) {
+          presenceTimers.delete(userId);
+          void markOffline(socket, userId);
+        }
+      }
     }, PRESENCE_TIMEOUT);
 
-    presenceTimers.set(userId, timer);
+    userTimers.set(socket.id, timer);
 
-    // On first heartbeat, broadcast online status to workspace rooms
-    if (isFirstHeartbeat) {
+    // Broadcast ONLINE only when this is the user's first active socket
+    if (isFirstSocket) {
       for (const room of socket.rooms) {
         if (room.startsWith('workspace:')) {
           socket.to(room).emit('presence:update', {
@@ -146,24 +164,33 @@ export function registerPresenceHandlers(socket: AppSocket): void {
   });
 
   /**
-   * On disconnect, immediately mark the user as offline.
+   * On disconnect, clear only this socket's timer.
+   * Only mark the user offline when their last socket disconnects.
    * This fires before the socket is removed from all rooms,
    * so we can still broadcast to workspace rooms.
    */
   socket.on('disconnect', () => {
-    const timer = presenceTimers.get(userId);
-    if (timer) {
-      clearTimeout(timer);
+    const userTimers = presenceTimers.get(userId);
+    if (userTimers) {
+      const timer = userTimers.get(socket.id);
+      if (timer) {
+        clearTimeout(timer);
+      }
+      userTimers.delete(socket.id);
+      // Only emit OFFLINE if no other tabs/sockets remain for this user
+      if (userTimers.size === 0) {
+        presenceTimers.delete(userId);
+        void markOffline(socket, userId);
+      }
     }
-    // Use void to handle the promise without awaiting
-    void markOffline(socket, userId);
   });
 }
 
 /**
  * Returns whether a user is currently tracked as online.
- * Useful for API endpoints that need to check presence.
+ * A user is online if they have at least one active socket timer.
  */
 export function isUserOnline(userId: string): boolean {
-  return presenceTimers.has(userId);
+  const userTimers = presenceTimers.get(userId);
+  return !!(userTimers && userTimers.size > 0);
 }

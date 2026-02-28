@@ -28,6 +28,16 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { EmojiUploader } from './EmojiUploader';
+import { EmojiManager } from './EmojiManager';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
@@ -45,10 +55,24 @@ import {
   updateMemberRole,
 } from '@/workspaces/actions';
 
+interface CustomEmojiItem {
+  id: string;
+  name: string;
+  imageUrl: string;
+  createdById: string;
+  createdAt: Date | string;
+  createdBy: {
+    name: string | null;
+    image: string | null;
+  };
+}
+
 interface WorkspaceSettingsProps {
   workspace: Workspace;
   members: WorkspaceMember[];
   currentUserRole: MemberRole;
+  currentUserId?: string;
+  initialEmojis?: CustomEmojiItem[];
 }
 
 const roleIcons: Record<MemberRole, React.ReactNode> = {
@@ -63,11 +87,38 @@ const roleBadgeVariant: Record<MemberRole, 'default' | 'secondary' | 'outline'> 
   [MemberRole.MEMBER]: 'outline',
 };
 
+const MAX_EMOJI = 100;
+
 export function WorkspaceSettings({
   workspace,
   members,
   currentUserRole,
+  currentUserId = '',
+  initialEmojis = [],
 }: WorkspaceSettingsProps) {
+  const [emojis, setEmojis] = useState<CustomEmojiItem[]>(initialEmojis);
+
+  const isAdmin =
+    currentUserRole === MemberRole.ADMIN || currentUserRole === MemberRole.OWNER;
+
+  const handleEmojiUploaded = (emoji: { id: string; name: string; imageUrl: string }) => {
+    setEmojis((prev) => [
+      ...prev,
+      {
+        id: emoji.id,
+        name: emoji.name,
+        imageUrl: emoji.imageUrl,
+        createdById: currentUserId,
+        createdAt: new Date(),
+        createdBy: { name: 'You', image: null },
+      },
+    ]);
+  };
+
+  const handleEmojiDeleted = (emojiId: string) => {
+    setEmojis((prev) => prev.filter((e) => e.id !== emojiId));
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -78,10 +129,11 @@ export function WorkspaceSettings({
       </div>
       <Separator />
       <Tabs defaultValue="general" className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="members">Members</TabsTrigger>
           <TabsTrigger value="invites">Invites</TabsTrigger>
+          <TabsTrigger value="emoji">Emoji</TabsTrigger>
         </TabsList>
 
         <TabsContent value="general">
@@ -100,6 +152,30 @@ export function WorkspaceSettings({
           <InvitesTab
             workspace={workspace}
             currentUserRole={currentUserRole}
+          />
+        </TabsContent>
+
+        <TabsContent value="emoji" className="space-y-6 pt-4">
+          <div>
+            <h3 className="text-sm font-semibold mb-1">Custom Emoji</h3>
+            <p className="text-xs text-muted-foreground mb-4">
+              Upload custom emoji to use in messages, reactions, and the emoji picker.
+            </p>
+            <EmojiUploader
+              workspaceId={workspace.id}
+              onSuccess={handleEmojiUploaded}
+              usedCount={emojis.length}
+              maxCount={MAX_EMOJI}
+            />
+          </div>
+          <Separator />
+          <EmojiManager
+            emojis={emojis}
+            workspaceId={workspace.id}
+            isAdmin={isAdmin}
+            currentUserId={currentUserId}
+            maxCount={MAX_EMOJI}
+            onDelete={handleEmojiDeleted}
           />
         </TabsContent>
       </Tabs>
@@ -208,6 +284,7 @@ function MembersTab({
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const [memberToRemove, setMemberToRemove] = useState<{ userId: string; name: string } | null>(null);
 
   const isOwner = currentUserRole === MemberRole.OWNER;
   const isAdmin =
@@ -226,11 +303,14 @@ function MembersTab({
     });
   }
 
-  function handleRemoveMember(targetUserId: string, userName: string) {
+  function handleConfirmRemove() {
+    if (!memberToRemove) return;
+    const { userId, name } = memberToRemove;
+    setMemberToRemove(null);
     startTransition(async () => {
       try {
-        await removeMember(workspace.id, targetUserId);
-        toast.success(`${userName} removed from workspace`);
+        await removeMember(workspace.id, userId);
+        toast.success(`${name} removed from workspace`);
         router.refresh();
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to remove member';
@@ -246,6 +326,35 @@ function MembersTab({
           {members.length} member{members.length !== 1 ? 's' : ''}
         </p>
       </div>
+
+      {/* Remove member confirmation dialog */}
+      <Dialog
+        open={!!memberToRemove}
+        onOpenChange={(open) => { if (!open) setMemberToRemove(null); }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Remove member</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to remove{' '}
+              <span className="font-semibold">{memberToRemove?.name}</span> from
+              this workspace? They will lose access immediately.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setMemberToRemove(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmRemove}
+              disabled={isPending}
+            >
+              Remove
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ScrollArea className="h-[400px]">
         <div className="space-y-2">
@@ -307,7 +416,7 @@ function MembersTab({
                     size="icon"
                     className="h-8 w-8 text-muted-foreground hover:text-destructive"
                     onClick={() =>
-                      handleRemoveMember(member.userId, member.user.name)
+                      setMemberToRemove({ userId: member.userId, name: member.user.name })
                     }
                     disabled={isPending}
                     title="Remove member"

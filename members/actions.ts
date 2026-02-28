@@ -82,6 +82,72 @@ export async function updateProfile(
 }
 
 /**
+ * Set or clear Do Not Disturb mode for the current user.
+ *
+ * @param dndUntil - Expiration date for DND, or null to clear
+ * @returns Updated user record with new dndUntil value
+ * @throws If not authenticated
+ */
+export async function setDND(
+  dndUntil: Date | null
+): Promise<UserProfile> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    throw new Error('Unauthorized: You must be signed in to set Do Not Disturb');
+  }
+
+  const userId = session.user.id;
+
+  const updated = await prisma.user.update({
+    where: { id: userId },
+    data: { dndUntil },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      image: true,
+      title: true,
+      statusText: true,
+      statusEmoji: true,
+      timezone: true,
+      dndUntil: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+
+  return updated;
+}
+
+/**
+ * Get the current user's DND status.
+ * Returns null if DND is not active or has expired.
+ */
+export async function getDNDStatus(): Promise<Date | null> {
+  const session = await auth();
+  if (!session?.user?.id) return null;
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { dndUntil: true },
+  });
+
+  if (!user?.dndUntil) return null;
+
+  // Auto-expire: if dndUntil is in the past, clear it
+  const now = new Date();
+  if (user.dndUntil < now) {
+    await prisma.user.update({
+      where: { id: session.user.id },
+      data: { dndUntil: null },
+    });
+    return null;
+  }
+
+  return user.dndUntil;
+}
+
+/**
  * Update a workspace member's role.
  * Only the workspace OWNER can change member roles.
  *

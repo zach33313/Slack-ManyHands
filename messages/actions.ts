@@ -181,13 +181,16 @@ export async function sendMessage(
   if (input.parentId) {
     const parent = await prisma.message.findUnique({
       where: { id: input.parentId },
-      select: { id: true, channelId: true },
+      select: { id: true, channelId: true, isDeleted: true },
     });
     if (!parent) {
       throw new Error('Parent message not found');
     }
     if (parent.channelId !== input.channelId) {
       throw new Error('Parent message does not belong to this channel');
+    }
+    if (parent.isDeleted) {
+      throw new Error('Cannot reply to a deleted message');
     }
   }
 
@@ -305,8 +308,8 @@ export async function sendMessage(
     }
   }
 
-  // 2. Create DM notification for direct messages
-  if (channel?.type === 'DM') {
+  // 2. Create DM notification for direct messages (DM and GROUP_DM)
+  if (channel?.type === 'DM' || channel?.type === 'GROUP_DM') {
     try {
       const dmMembers = await prisma.channelMember.findMany({
         where: { channelId: input.channelId },

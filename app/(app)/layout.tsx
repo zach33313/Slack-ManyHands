@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { auth } from '@/auth/auth';
 import { prisma } from '@/shared/lib/prisma';
 import { SocketProvider } from '@/components/providers/socket-provider';
+import { CallProvider } from '@/calls/components/CallProvider';
 
 /**
  * Authenticated app layout.
@@ -35,9 +36,11 @@ export default async function AppLayout({
 
   return (
     <SocketProvider>
-      <div className="flex h-screen overflow-hidden bg-background">
-        {children}
-      </div>
+      <CallProvider>
+        <div className="flex h-screen overflow-hidden bg-background">
+          {children}
+        </div>
+      </CallProvider>
     </SocketProvider>
   );
 }

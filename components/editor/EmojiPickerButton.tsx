@@ -4,17 +4,22 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Smile } from 'lucide-react'
 import { cn } from '@/shared/lib/utils'
 import type { Editor } from '@tiptap/react'
+import { CustomEmojiPicker } from '@/custom-emojis/components/CustomEmojiPicker'
 
 interface EmojiPickerButtonProps {
   editor: Editor | null
+  /** When provided, workspace custom emoji are shown above the standard picker */
+  workspaceId?: string
 }
 
 /**
  * Emoji picker button for the editor toolbar.
  * Opens an emoji-mart Picker popover above the button.
  * On emoji selection, inserts the native emoji character at the cursor.
+ * When workspaceId is provided, a custom emoji section is shown above
+ * the standard emoji-mart picker.
  */
-export default function EmojiPickerButton({ editor }: EmojiPickerButtonProps) {
+export default function EmojiPickerButton({ editor, workspaceId }: EmojiPickerButtonProps) {
   const [open, setOpen] = useState(false)
   const [PickerComponent, setPickerComponent] = useState<any>(null)
   const [emojiData, setEmojiData] = useState<any>(null)
@@ -93,9 +98,20 @@ export default function EmojiPickerButton({ editor }: EmojiPickerButtonProps) {
 
       {open && (
         <div
-          className="absolute bottom-full right-0 mb-2 z-50"
+          className="absolute bottom-full right-0 mb-2 z-50 rounded-lg border bg-popover shadow-lg overflow-hidden"
           style={{ width: '352px' }}
         >
+          {workspaceId && (
+            <CustomEmojiPicker
+              workspaceId={workspaceId}
+              onSelect={(code) => {
+                if (editor) {
+                  editor.chain().focus().insertContent(code).run()
+                }
+                setOpen(false)
+              }}
+            />
+          )}
           {PickerComponent && emojiData ? (
             <PickerComponent
               data={emojiData}
@@ -107,7 +123,7 @@ export default function EmojiPickerButton({ editor }: EmojiPickerButtonProps) {
               perLine={9}
             />
           ) : (
-            <div className="flex h-[350px] w-full items-center justify-center rounded-lg border bg-popover shadow-lg">
+            <div className="flex h-[350px] w-full items-center justify-center">
               <div className="text-sm text-muted-foreground">Loading...</div>
             </div>
           )}

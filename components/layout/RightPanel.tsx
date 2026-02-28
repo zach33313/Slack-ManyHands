@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { m, AnimatePresence } from 'framer-motion';
 import { useAppStore } from '@/store';
 import { useMessagesStore } from '@/messages/store';
 import { cn } from '@/shared/lib/utils';
@@ -12,12 +13,14 @@ import { MemberList } from '@/members/components/MemberList';
 import { ThreadPanel } from '@/messages/components/ThreadPanel';
 import { ChannelInviteDialog } from '@/channels/components/ChannelInviteDialog';
 import { openDM } from '@/channels/actions';
+import { panelSlideRight } from '@/shared/lib/animations';
 import type { MemberWithUser } from '@/members/types';
 
 /**
  * Right-side drawer panel that conditionally renders ThreadPanel,
  * MemberList, or ChannelInfo based on Zustand UI state.
- * Slides in from the right with animation.
+ * Slides in from the right with Framer Motion panelSlideRight animation.
+ * AnimatePresence handles the exit animation when the panel closes.
  */
 export function RightPanel() {
   const rightPanelView = useAppStore((s) => s.rightPanelView);
@@ -28,25 +31,31 @@ export function RightPanel() {
   // Show thread panel when a thread is activated from messages store
   const effectiveView = activeThreadId ? 'thread' : rightPanelView;
 
-  if (!effectiveView) return null;
-
   return (
-    <div
-      className={cn(
-        'flex flex-col border-l bg-background shrink-0',
-        'w-[380px] max-w-full',
-        'animate-in slide-in-from-right-5 duration-200'
+    <AnimatePresence mode="wait">
+      {effectiveView && (
+        <m.div
+          key={effectiveView}
+          variants={panelSlideRight}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          className={cn(
+            'flex flex-col border-l bg-background shrink-0',
+            'w-[380px] max-w-full'
+          )}
+        >
+          {effectiveView === 'thread' && currentUserId && (
+            <ThreadPanel
+              currentUserId={currentUserId}
+              channelName={currentChannel?.name}
+            />
+          )}
+          {effectiveView === 'members' && <MemberListContent />}
+          {effectiveView === 'channel-info' && <ChannelInfoContent />}
+        </m.div>
       )}
-    >
-      {effectiveView === 'thread' && currentUserId && (
-        <ThreadPanel
-          currentUserId={currentUserId}
-          channelName={currentChannel?.name}
-        />
-      )}
-      {effectiveView === 'members' && <MemberListContent />}
-      {effectiveView === 'channel-info' && <ChannelInfoContent />}
-    </div>
+    </AnimatePresence>
   );
 }
 
@@ -58,6 +67,8 @@ function MemberListContent() {
   const currentChannel = useAppStore((s) => s.currentChannel);
   const [members, setMembers] = useState<MemberWithUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const router = useRouter();
 
   const handleMessageClick = useCallback(async (targetUserId: string) => {
@@ -76,36 +87,43 @@ function MemberListContent() {
 
     let cancelled = false;
     setLoading(true);
+    setError(null);
 
     fetch(`/api/channels/${currentChannel.id}/members`)
-      .then((res) => res.json())
-      .then((body) => {
-        if (!cancelled && body.ok) {
-          // Transform ChannelMemberWithUser[] to MemberWithUser[] shape
-          const transformed: MemberWithUser[] = (body.data ?? []).map(
-            (m: any) => ({
-              id: m.id,
-              workspaceId: currentWorkspace!.id,
-              userId: m.userId,
-              role: 'MEMBER' as const,
-              joinedAt: m.joinedAt,
-              user: {
-                id: m.user.id,
-                name: m.user.name ?? null,
-                email: m.user.email ?? '',
-                image: m.user.image ?? null,
-                title: m.user.title ?? null,
-                statusText: m.user.statusText ?? null,
-                statusEmoji: m.user.statusEmoji ?? null,
-                timezone: m.user.timezone ?? null,
-              },
-            })
-          );
-          setMembers(transformed);
-        }
+      .then((res) => {
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        return res.json();
       })
-      .catch(() => {
-        // Silently handle fetch errors
+      .then((body) => {
+        if (cancelled) return;
+        if (!body.ok) throw new Error(body.error ?? 'Failed to load members');
+        // Transform ChannelMemberWithUser[] to MemberWithUser[] shape
+        const transformed: MemberWithUser[] = (body.data ?? []).map(
+          (m: any) => ({
+            id: m.id,
+            workspaceId: currentWorkspace!.id,
+            userId: m.userId,
+            role: 'MEMBER' as const,
+            joinedAt: m.joinedAt,
+            user: {
+              id: m.user.id,
+              name: m.user.name ?? null,
+              email: m.user.email ?? '',
+              image: m.user.image ?? null,
+              title: m.user.title ?? null,
+              statusText: m.user.statusText ?? null,
+              statusEmoji: m.user.statusEmoji ?? null,
+              timezone: m.user.timezone ?? null,
+            },
+          })
+        );
+        setMembers(transformed);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('Failed to load members:', err);
+          setError('Could not load members. Please try again.');
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -114,7 +132,7 @@ function MemberListContent() {
     return () => {
       cancelled = true;
     };
-  }, [currentChannel?.id, currentWorkspace]);
+  }, [currentChannel?.id, currentWorkspace, retryCount]);
 
   return (
     <>
@@ -137,6 +155,13 @@ function MemberListContent() {
       {loading ? (
         <div className="flex flex-1 items-center justify-center">
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : error ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
+          <p className="text-sm text-muted-foreground">{error}</p>
+          <Button variant="outline" size="sm" onClick={() => setRetryCount((c) => c + 1)}>
+            Retry
+          </Button>
         </div>
       ) : (
         <MemberList members={members} onMessageClick={handleMessageClick} className="flex-1" />

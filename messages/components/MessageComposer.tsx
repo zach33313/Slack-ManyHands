@@ -13,6 +13,10 @@ import { updateProfile } from '@/members/actions'
 import { updateChannel, updateChannelNotifyPref } from '@/channels/actions'
 import type { TiptapJSON } from '@/shared/types'
 import type { MessageSendPayload } from '@/shared/types/socket'
+import { GifSearchPanel } from '@/gifs/components/GifSearchPanel'
+import { SchedulePicker } from '@/scheduling/components/SchedulePicker'
+import { AudioRecorder } from './AudioRecorder'
+import type { TenorGif } from '@/gifs/types'
 
 interface PendingFile {
   file: File
@@ -51,6 +55,12 @@ export default function MessageComposer({
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isTypingRef = useRef(false)
   const fileIdCounter = useRef(0)
+
+  // GIF picker state
+  const [showGifPicker, setShowGifPicker] = useState(false)
+  // Schedule picker state
+  const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [scheduleContent, setScheduleContent] = useState<{ contentJson: TiptapJSON; contentPlain: string } | null>(null)
 
   // Clean up typing state on unmount or channel change
   useEffect(() => {
@@ -222,13 +232,16 @@ export default function MessageComposer({
             return
           }
           case '/away': {
-            const store = useAppStore.getState()
-            const isCurrentlyAway = store.user?.statusText === 'Away'
+            // Read current status synchronously before the async call so the toggle
+            // decision is based on the state at the moment the command was submitted.
+            const isCurrentlyAway = useAppStore.getState().user?.statusText === 'Away'
             try {
               const updated = await updateProfile({
                 statusEmoji: isCurrentlyAway ? '' : '🌙',
                 statusText: isCurrentlyAway ? '' : 'Away',
               })
+              // Re-read store after the await to avoid spreading stale user data.
+              const store = useAppStore.getState()
               if (store.user) {
                 store.setUser({
                   ...store.user,
@@ -291,6 +304,49 @@ export default function MessageComposer({
             toast.info('Reminders are not yet supported')
             return
           }
+          case '/poll': {
+            // Format: /poll Question? | Option 1 | Option 2 | Option 3
+            if (!args) {
+              toast.error('Usage: /poll Question? | Option 1 | Option 2')
+              return
+            }
+            const parts = args.split('|').map((p) => p.trim()).filter(Boolean)
+            if (parts.length < 3) {
+              toast.error('Usage: /poll Question? | Option 1 | Option 2')
+              return
+            }
+            const question = parts[0]!
+            const options = parts.slice(1)
+            if (options.length < 2) {
+              toast.error('A poll needs at least 2 options')
+              return
+            }
+            {
+              const messageContentJson: TiptapJSON = {
+                type: 'doc',
+                content: [
+                  { type: 'paragraph', content: [{ type: 'text', text: `📊 Poll: ${question}` }] },
+                ],
+              }
+              socket.emit(
+                'message:send',
+                {
+                  channelId,
+                  content: messageContentJson as unknown as Record<string, unknown>,
+                  ...(parentId && { parentId }),
+                  poll: { question, options },
+                } as any,
+                (res: { ok: boolean; error?: string }) => {
+                  if (res.ok) {
+                    toast.success('Poll created!')
+                  } else {
+                    toast.error(res.error ?? 'Failed to create poll')
+                  }
+                }
+              )
+            }
+            return
+          }
           default:
             // Not a known command — fall through to send as message
             break
@@ -298,6 +354,12 @@ export default function MessageComposer({
       }
 
       // --- Normal message send ---
+      // Guard: if any file is still uploading, block send and tell the user
+      if (pendingFiles.some((f) => f.uploading)) {
+        toast.error('Please wait for files to finish uploading')
+        return
+      }
+
       // Collect uploaded file IDs (skip files that failed or are still uploading)
       const fileIds = pendingFiles
         .filter((f) => f.uploadedId && !f.error)
@@ -367,6 +429,71 @@ export default function MessageComposer({
     [emitTypingStart]
   )
 
+  // Handle audio recording send — file is already uploaded; attach it via fileId
+  const handleAudioSend = useCallback(
+    async (fileId: string, fileName: string, mimeType: string, size: number, duration: number) => {
+      const contentJson: TiptapJSON = {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            attrs: { audioMetadata: { fileName, mimeType, size, duration } },
+            content: [{ type: 'text', text: '🎙️ Voice message' }],
+          },
+        ],
+      }
+      const payload: MessageSendPayload = {
+        channelId,
+        content: contentJson as unknown as Record<string, unknown>,
+        ...(parentId && { parentId }),
+        fileIds: [fileId],
+        audioMetadata: { fileName, mimeType, size, duration },
+      }
+      socket.emit('message:send', payload)
+    },
+    [channelId, parentId, socket]
+  )
+
+  // Handle GIF selection — send as image message
+  const handleGifSelect = useCallback(
+    (gif: TenorGif) => {
+      const contentJson: TiptapJSON = {
+        type: 'doc',
+        content: [
+          {
+            type: 'image',
+            attrs: {
+              src: gif.url,
+              alt: gif.title || 'GIF',
+              title: gif.title || 'GIF',
+            },
+          },
+        ],
+      }
+      const payload: MessageSendPayload = {
+        channelId,
+        content: contentJson as unknown as Record<string, unknown>,
+        ...(parentId && { parentId }),
+      }
+      socket.emit('message:send', payload)
+      setShowGifPicker(false)
+    },
+    [channelId, parentId, socket]
+  )
+
+  // Handle schedule button click — capture content and open picker
+  const handleScheduleClick = useCallback(
+    (contentJson: TiptapJSON, contentPlain: string) => {
+      if (!contentPlain.trim()) {
+        toast.error('Write a message first to schedule it')
+        return
+      }
+      setScheduleContent({ contentJson, contentPlain })
+      setScheduleOpen(true)
+    },
+    []
+  )
+
   const placeholderText = parentId
     ? 'Reply...'
     : `Message #${channelName}`
@@ -433,14 +560,48 @@ export default function MessageComposer({
         </div>
       )}
 
+      {/* GIF picker overlay (positioned above composer) */}
+      {showGifPicker && (
+        <div className="relative">
+          <GifSearchPanel
+            onSelect={handleGifSelect}
+            onClose={() => setShowGifPicker(false)}
+          />
+        </div>
+      )}
+
+      {/* Schedule picker popover */}
+      {scheduleOpen && scheduleContent && (
+        <div className="absolute bottom-full left-0 mb-2 z-50 bg-popover border rounded-lg shadow-lg min-w-[240px]">
+          <SchedulePicker
+            channelId={channelId}
+            contentJson={scheduleContent.contentJson}
+            contentPlain={scheduleContent.contentPlain}
+            onScheduled={() => {
+              setScheduleOpen(false)
+              setScheduleContent(null)
+            }}
+            onCancel={() => {
+              setScheduleOpen(false)
+              setScheduleContent(null)
+            }}
+          />
+        </div>
+      )}
+
       {/* Editor wrapper with keyboard capture for typing indicator */}
       <div onKeyDownCapture={handleKeyDownCapture}>
         <SlackEditor
           onSubmit={handleSubmit}
           placeholder={placeholderText}
-          disabled={disabled || hasFilesUploading}
+          disabled={disabled}
           workspaceId={workspaceId}
           onFileUpload={handleFileUpload}
+          onGifClick={() => setShowGifPicker((prev) => !prev)}
+          onScheduleClick={handleScheduleClick}
+          extraToolbarButtons={
+            <AudioRecorder onSend={handleAudioSend} />
+          }
         />
       </div>
     </div>

@@ -28,7 +28,7 @@ import type {
 } from './index';
 
 // ---------------------------------------------------------------------------
-// Client → Server event payloads
+// Existing Client → Server payload types
 // ---------------------------------------------------------------------------
 
 export interface WorkspaceJoinPayload {
@@ -51,6 +51,10 @@ export interface MessageSendPayload {
   parentId?: string;
   /** IDs of files previously uploaded via POST /api/files */
   fileIds?: string[];
+  /** Optional poll to create alongside the message (from /poll slash command) */
+  poll?: { question: string; options: string[] };
+  /** Optional audio metadata for voice messages recorded in the composer */
+  audioMetadata?: { fileName: string; mimeType: string; size: number; duration: number };
 }
 
 export interface MessageEditPayload {
@@ -81,7 +85,7 @@ export interface TypingStopPayload {
 }
 
 // ---------------------------------------------------------------------------
-// Server → Client event payloads
+// Existing Server → Client payload types
 // ---------------------------------------------------------------------------
 
 export interface MessageDeletedPayload {
@@ -125,6 +129,270 @@ export interface DmParticipantsPayload {
 }
 
 // ---------------------------------------------------------------------------
+// NEW: Call signaling — Client → Server payloads
+// ---------------------------------------------------------------------------
+
+/** Call type: 1:1 direct call or group huddle */
+export type CallType = '1:1' | 'huddle';
+
+export interface CallInitiatePayload {
+  channelId: string;
+  type: CallType;
+}
+
+export interface CallAcceptPayload {
+  callId: string;
+}
+
+export interface CallDeclinePayload {
+  callId: string;
+}
+
+export interface CallHangupPayload {
+  callId: string;
+}
+
+export interface CallSignalPayload {
+  callId: string;
+  toUserId: string;
+  /** simple-peer signal data — opaque, never inspect */
+  signal: unknown;
+}
+
+export interface CallToggleMediaPayload {
+  callId: string;
+  isMuted: boolean;
+  isCameraOn: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Call signaling — Server → Client payloads
+// ---------------------------------------------------------------------------
+
+export interface CallIncomingPayload {
+  callId: string;
+  channelId: string;
+  callerId: string;
+  callerName: string;
+  type: CallType;
+}
+
+export interface CallAcceptedPayload {
+  callId: string;
+  userId: string;
+}
+
+export interface CallDeclinedPayload {
+  callId: string;
+  userId: string;
+}
+
+export interface CallSignalFromServerPayload {
+  callId: string;
+  fromUserId: string;
+  /** simple-peer signal data — opaque, never inspect */
+  signal: unknown;
+}
+
+export interface CallEndedPayload {
+  callId: string;
+  /** 'hangup' | 'declined' | 'missed' | 'error' */
+  reason: string;
+}
+
+export interface CallMediaToggledPayload {
+  callId: string;
+  userId: string;
+  isMuted: boolean;
+  isCameraOn: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Huddle events — Client → Server payloads
+// ---------------------------------------------------------------------------
+
+export interface HuddleJoinPayload {
+  channelId: string;
+}
+
+export interface HuddleLeavePayload {
+  channelId: string;
+}
+
+export interface HuddleSignalPayload {
+  channelId: string;
+  toUserId: string;
+  /** simple-peer signal data — opaque, never inspect */
+  signal: unknown;
+}
+
+export interface HuddleToggleMediaPayload {
+  channelId: string;
+  isMuted: boolean;
+  isCameraOn: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Huddle events — Server → Client payloads
+// ---------------------------------------------------------------------------
+
+export interface HuddleParticipant {
+  userId: string;
+  user: UserSummary;
+  isMuted: boolean;
+  isCameraOn: boolean;
+  joinedAt: Date;
+}
+
+export interface HuddleStartedPayload {
+  channelId: string;
+  participants: HuddleParticipant[];
+}
+
+export interface HuddleUserJoinedPayload {
+  channelId: string;
+  participant: HuddleParticipant;
+}
+
+export interface HuddleUserLeftPayload {
+  channelId: string;
+  userId: string;
+}
+
+export interface HuddleSignalFromServerPayload {
+  channelId: string;
+  fromUserId: string;
+  signal: unknown;
+}
+
+export interface HuddleParticipantsPayload {
+  channelId: string;
+  participants: HuddleParticipant[];
+}
+
+export interface HuddleMediaToggledPayload {
+  channelId: string;
+  userId: string;
+  isMuted: boolean;
+  isCameraOn: boolean;
+}
+
+export interface HuddleEndedPayload {
+  channelId: string;
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Poll events — Client → Server payloads
+// ---------------------------------------------------------------------------
+
+export interface PollVotePayload {
+  pollId: string;
+  option: string;
+}
+
+export interface PollUnvotePayload {
+  pollId: string;
+  option: string;
+}
+
+export interface PollEndPayload {
+  pollId: string;
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Poll events — Server → Client payloads
+// ---------------------------------------------------------------------------
+
+export interface PollVoteGroup {
+  option: string;
+  count: number;
+  userIds: string[];
+  percentage: number;
+}
+
+export interface PollUpdatedPayload {
+  pollId: string;
+  votes: PollVoteGroup[];
+  totalVotes: number;
+}
+
+export interface PollEndedPayload {
+  pollId: string;
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Canvas events — Client → Server payloads
+// ---------------------------------------------------------------------------
+
+export interface CanvasJoinPayload {
+  canvasId: string;
+}
+
+export interface CanvasLeavePayload {
+  canvasId: string;
+}
+
+export interface CanvasUpdatePayload {
+  canvasId: string;
+  /** Yjs binary update encoded as base64 or Uint8Array */
+  update: unknown;
+}
+
+export interface CanvasAwarenessPayload {
+  canvasId: string;
+  /** Yjs awareness state for the current user */
+  state: unknown;
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Canvas events — Server → Client payloads
+// ---------------------------------------------------------------------------
+
+export interface CanvasInitialStatePayload {
+  canvasId: string;
+  /** Full Yjs document state for initial sync */
+  state: unknown;
+}
+
+export interface CanvasUpdateFromServerPayload {
+  canvasId: string;
+  update: unknown;
+}
+
+export interface CanvasAwarenessFromServerPayload {
+  canvasId: string;
+  /** Map of userId → awareness state for all connected users */
+  states: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Read receipt events
+// ---------------------------------------------------------------------------
+
+export interface ChannelMarkReadPayload {
+  channelId: string;
+  messageId: string;
+}
+
+export interface ChannelUserReadPayload {
+  channelId: string;
+  messageId: string;
+  userId: string;
+  readAt: Date;
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Workflow events — Server → Client payloads
+// ---------------------------------------------------------------------------
+
+export interface WorkflowExecutedPayload {
+  workflowId: string;
+  workspaceId: string;
+  triggeredBy: string;
+  status: 'success' | 'failed' | 'partial';
+}
+
+// ---------------------------------------------------------------------------
 // Socket.IO typed event maps
 // ---------------------------------------------------------------------------
 
@@ -133,6 +401,8 @@ export interface DmParticipantsPayload {
  * Key: event name, Value: callback with payload argument(s).
  */
 export interface ClientToServerEvents {
+  // --- Existing events ---
+
   /** Join workspace room to receive workspace-level events */
   'workspace:join': (payload: WorkspaceJoinPayload) => void;
 
@@ -143,7 +413,7 @@ export interface ClientToServerEvents {
   'channel:leave': (payload: ChannelLeavePayload) => void;
 
   /** Send a new message or thread reply */
-  'message:send': (payload: MessageSendPayload) => void;
+  'message:send': (payload: MessageSendPayload, ack?: (res: { ok: boolean; error?: string }) => void) => void;
 
   /** Edit an existing message */
   'message:edit': (payload: MessageEditPayload) => void;
@@ -165,6 +435,70 @@ export interface ClientToServerEvents {
 
   /** Heartbeat to keep presence status as online; send every 30s */
   'presence:heartbeat': () => void;
+
+  // --- NEW: Call events ---
+
+  /** Initiate a 1:1 call or channel huddle */
+  'call:initiate': (payload: CallInitiatePayload) => void;
+
+  /** Accept an incoming call */
+  'call:accept': (payload: CallAcceptPayload) => void;
+
+  /** Decline an incoming call */
+  'call:decline': (payload: CallDeclinePayload) => void;
+
+  /** Hang up / leave an active call */
+  'call:hangup': (payload: CallHangupPayload) => void;
+
+  /** Send a WebRTC signaling message to a specific peer */
+  'call:signal': (payload: CallSignalPayload) => void;
+
+  /** Toggle microphone or camera state in a call */
+  'call:toggle-media': (payload: CallToggleMediaPayload) => void;
+
+  // --- NEW: Huddle events ---
+
+  /** Join a channel huddle (persistent group audio) */
+  'huddle:join': (payload: HuddleJoinPayload) => void;
+
+  /** Leave a channel huddle */
+  'huddle:leave': (payload: HuddleLeavePayload) => void;
+
+  /** Send a WebRTC signaling message to a huddle peer */
+  'huddle:signal': (payload: HuddleSignalPayload) => void;
+
+  /** Toggle microphone or camera in a huddle */
+  'huddle:toggle-media': (payload: HuddleToggleMediaPayload) => void;
+
+  // --- NEW: Poll events ---
+
+  /** Cast a vote on a poll option */
+  'poll:vote': (payload: PollVotePayload) => void;
+
+  /** Remove a vote from a poll option */
+  'poll:unvote': (payload: PollUnvotePayload) => void;
+
+  /** End a poll early (creator or ADMIN+) */
+  'poll:end': (payload: PollEndPayload) => void;
+
+  // --- NEW: Canvas events ---
+
+  /** Join a canvas room to receive Yjs updates */
+  'canvas:join': (payload: CanvasJoinPayload) => void;
+
+  /** Leave a canvas room */
+  'canvas:leave': (payload: CanvasLeavePayload) => void;
+
+  /** Broadcast a Yjs document update to other canvas editors */
+  'canvas:update': (payload: CanvasUpdatePayload) => void;
+
+  /** Broadcast Yjs awareness state (cursor position, selection) */
+  'canvas:awareness': (payload: CanvasAwarenessPayload) => void;
+
+  // --- NEW: Read receipts ---
+
+  /** Mark a channel as read up to a specific message */
+  'channel:mark-read': (payload: ChannelMarkReadPayload) => void;
 }
 
 /**
@@ -172,6 +506,8 @@ export interface ClientToServerEvents {
  * Key: event name, Value: callback with payload argument(s).
  */
 export interface ServerToClientEvents {
+  // --- Existing events ---
+
   /** A new message was posted in a subscribed channel */
   'message:new': (message: MessageWithMeta) => void;
 
@@ -216,6 +552,78 @@ export interface ServerToClientEvents {
 
   /** DM participant info for a newly created DM/GROUP_DM channel */
   'dm:participants': (payload: DmParticipantsPayload) => void;
+
+  // --- NEW: Call events ---
+
+  /** Notifies a user of an incoming call */
+  'call:incoming': (payload: CallIncomingPayload) => void;
+
+  /** Notifies call participants that a user accepted */
+  'call:accepted': (payload: CallAcceptedPayload) => void;
+
+  /** Notifies the caller that the callee declined */
+  'call:declined': (payload: CallDeclinedPayload) => void;
+
+  /** Relays a WebRTC signal from one peer to another */
+  'call:signal': (payload: CallSignalFromServerPayload) => void;
+
+  /** Notifies call participants that the call has ended */
+  'call:ended': (payload: CallEndedPayload) => void;
+
+  /** Notifies of a media toggle (mute/camera) from another participant */
+  'call:media-toggled': (payload: CallMediaToggledPayload) => void;
+
+  // --- NEW: Huddle events ---
+
+  /** A huddle was started in a channel */
+  'huddle:started': (payload: HuddleStartedPayload) => void;
+
+  /** A user joined the channel huddle */
+  'huddle:user-joined': (payload: HuddleUserJoinedPayload) => void;
+
+  /** A user left the channel huddle */
+  'huddle:user-left': (payload: HuddleUserLeftPayload) => void;
+
+  /** Relays a WebRTC signal between huddle peers */
+  'huddle:signal': (payload: HuddleSignalFromServerPayload) => void;
+
+  /** Full participant list snapshot (sent on join) */
+  'huddle:participants': (payload: HuddleParticipantsPayload) => void;
+
+  /** Notifies of a media toggle from another huddle participant */
+  'huddle:media-toggled': (payload: HuddleMediaToggledPayload) => void;
+
+  /** The huddle has ended (all participants left) */
+  'huddle:ended': (payload: HuddleEndedPayload) => void;
+
+  // --- NEW: Poll events ---
+
+  /** Vote counts changed — full snapshot */
+  'poll:updated': (payload: PollUpdatedPayload) => void;
+
+  /** Poll has ended (time expired or ended early) */
+  'poll:ended': (payload: PollEndedPayload) => void;
+
+  // --- NEW: Canvas events ---
+
+  /** Initial canvas state for a newly joined editor */
+  'canvas:initial-state': (payload: CanvasInitialStatePayload) => void;
+
+  /** A Yjs document update from another editor */
+  'canvas:update': (payload: CanvasUpdateFromServerPayload) => void;
+
+  /** Awareness state update from other editors (cursors, selections) */
+  'canvas:awareness': (payload: CanvasAwarenessFromServerPayload) => void;
+
+  // --- NEW: Read receipts ---
+
+  /** Another user read up to a specific message in a channel */
+  'channel:user-read': (payload: ChannelUserReadPayload) => void;
+
+  // --- NEW: Workflow events ---
+
+  /** A workspace workflow was executed (notifies admins) */
+  'workflow:executed': (payload: WorkflowExecutedPayload) => void;
 }
 
 /**

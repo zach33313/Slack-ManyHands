@@ -47,6 +47,9 @@ model User {
   statusEmoji String?
   timezone    String?
 
+  // NEW: Do Not Disturb expiration timestamp
+  dndUntil DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -54,7 +57,7 @@ model User {
   accounts Account[]
   sessions Session[]
 
-  // Domain relations
+  // Domain relations (existing)
   ownedWorkspaces      Workspace[]       @relation("WorkspaceOwner")
   workspaceMemberships WorkspaceMember[]
   channelMemberships   ChannelMember[]
@@ -67,6 +70,17 @@ model User {
   notifications        Notification[]
   sentNotifications    Notification[]    @relation("NotificationActor")
   customEmojis         CustomEmoji[]     @relation("EmojiCreator")
+
+  // NEW relations
+  pollVotes         PollVote[]          @relation("PollVotes")
+  canvasVersions    CanvasVersion[]
+  createdCanvases   Canvas[]
+  scheduledMessages ScheduledMessage[]  @relation("ScheduledMessages")
+  callsInitiated    Call[]              @relation("CallsInitiated")
+  callParticipants  CallParticipant[]
+  channelCategories ChannelCategory[]   @relation("ChannelCategories")
+  workflowsCreated  Workflow[]          @relation("WorkflowsCreated")
+  auditLogs         AuditLog[]          @relation("AuditLogs")
 
   @@map("users")
 }
@@ -136,6 +150,10 @@ model Workspace {
   channels     Channel[]
   customEmojis CustomEmoji[]
 
+  // NEW relations
+  workflows   Workflow[]
+  auditLogs   AuditLog[]
+
   @@map("workspaces")
 }
 
@@ -182,6 +200,12 @@ model Channel {
   members   ChannelMember[]
   messages  Message[]
   pins      Pin[]
+
+  // NEW relations
+  canvas            Canvas[]
+  calls             Call[]
+  scheduledMessages ScheduledMessage[]
+  channelCategories ChannelCategory[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
@@ -245,6 +269,10 @@ model Message {
   files     FileAttachment[]
   pins      Pin[]
   bookmarks Bookmark[]
+
+  // NEW relations
+  poll         Poll?
+  linkPreviews LinkPreview[]
 
   @@index([channelId, createdAt(sort: Desc)])
   @@index([parentId])
@@ -384,4 +412,298 @@ model CustomEmoji {
   @@unique([workspaceId, name])
   @@index([workspaceId])
   @@map("custom_emojis")
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled Messages
+// ---------------------------------------------------------------------------
+
+model ScheduledMessage {
+  id           String   @id @default(cuid())
+  channelId    String
+  userId       String
+  contentJson  String
+  contentPlain String
+  scheduledFor DateTime
+  sentAt       DateTime?
+  isCancelled  Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation("ScheduledMessages", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Composite index for the cron job: find unsent, uncancelled messages due now
+  @@index([scheduledFor, sentAt])
+  @@index([channelId])
+  @@index([userId])
+  @@map("scheduled_messages")
+}
+
+// ---------------------------------------------------------------------------
+// Polls
+// ---------------------------------------------------------------------------
+
+model Poll {
+  id          String   @id @default(cuid())
+  messageId   String   @unique
+  question    String
+  /// JSON array of option strings: ["Option 1", "Option 2", ...]
+  options     String
+  isActive    Boolean  @default(true)
+  /// When true, voters may select more than one option
+  multiChoice Boolean  @default(false)
+  endsAt      DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  message Message    @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  votes   PollVote[]
+
+  @@index([messageId])
+  @@index([isActive, endsAt])
+  @@map("polls")
+}
+
+model PollVote {
+  id     String @id @default(cuid())
+  pollId String
+  userId String
+  /// The selected option value from Poll.options
+  option String
+
+  votedAt DateTime @default(now())
+
+  poll Poll @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  user User @relation("PollVotes", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// A user can only vote once per option per poll
+  @@unique([pollId, userId, option])
+  @@index([pollId])
+  @@index([userId])
+  @@map("poll_votes")
+}
+
+// ---------------------------------------------------------------------------
+// Link Previews
+// ---------------------------------------------------------------------------
+
+model LinkPreview {
+  id          String  @id @default(cuid())
+  messageId   String?
+  url         String
+  title       String?
+  description String?
+  imageUrl    String?
+  domain      String
+
+  createdAt DateTime @default(now())
+
+  message Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([url])
+  @@index([domain])
+  @@map("link_previews")
+}
+
+// ---------------------------------------------------------------------------
+// Canvas (Collaborative Documents)
+// ---------------------------------------------------------------------------
+
+model Canvas {
+  id          String  @id @default(cuid())
+  channelId   String
+  name        String
+  /// Tiptap/Yjs document serialized as JSON string
+  contentJson String
+  createdById String
+  isActive    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  channel   Channel         @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  createdBy User            @relation(fields: [createdById], references: [id])
+  versions  CanvasVersion[]
+
+  @@unique([channelId, name])
+  @@index([channelId])
+  @@index([createdById])
+  @@map("canvas")
+}
+
+model CanvasVersion {
+  id                String  @id @default(cuid())
+  canvasId          String
+  userId            String
+  /// Full content snapshot at this version
+  contentJson       String
+  changeDescription String?
+
+  createdAt DateTime @default(now())
+
+  canvas Canvas @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  editor User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([canvasId, createdAt(sort: Desc)])
+  @@index([userId])
+  @@map("canvas_versions")
+}
+
+// ---------------------------------------------------------------------------
+// Voice/Video Calls
+// ---------------------------------------------------------------------------
+
+model Call {
+  id          String    @id @default(cuid())
+  channelId   String
+  initiatorId String
+  startedAt   DateTime  @default(now())
+  endedAt     DateTime?
+  /// Duration in seconds
+  duration    Int?
+
+  channel      Channel          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  initiator    User             @relation("CallsInitiated", fields: [initiatorId], references: [id])
+  participants CallParticipant[]
+
+  @@index([channelId, startedAt(sort: Desc)])
+  @@index([initiatorId])
+  @@map("calls")
+}
+
+model CallParticipant {
+  id       String    @id @default(cuid())
+  callId   String
+  userId   String
+  joinedAt DateTime  @default(now())
+  leftAt   DateTime?
+
+  call Call @relation(fields: [callId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([callId, userId])
+  @@index([callId])
+  @@index([userId])
+  @@map("call_participants")
+}
+
+// ---------------------------------------------------------------------------
+// Channel Categories (per-user channel organization)
+// ---------------------------------------------------------------------------
+
+model ChannelCategory {
+  id           String @id @default(cuid())
+  channelId    String
+  userId       String
+  categoryName String
+  /// Position within the category list for ordering
+  position     Int    @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation("ChannelCategories", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@index([userId, position])
+  @@index([channelId])
+  @@map("channel_categories")
+}
+
+// ---------------------------------------------------------------------------
+// Workflows (Automation)
+// ---------------------------------------------------------------------------
+
+// WorkflowTriggerType values: message_posted | member_joined | reaction_added | scheduled
+// WorkflowActionType values: post_message | send_notification | add_reaction | assign_role
+
+model Workflow {
+  id          String  @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?
+  enabled     Boolean @default(true)
+  /// Trigger type: 'message_posted' | 'member_joined' | 'reaction_added' | 'scheduled'
+  triggerType String
+  /// JSON object — trigger-specific configuration
+  triggerConfig String
+  createdById String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace  Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy  User                @relation("WorkflowsCreated", fields: [createdById], references: [id])
+  actions    WorkflowAction[]
+  executions WorkflowExecution[]
+
+  @@index([workspaceId])
+  @@index([createdById])
+  @@map("workflows")
+}
+
+model WorkflowAction {
+  id         String @id @default(cuid())
+  workflowId String
+  /// Execution order (0-based)
+  sequence   Int
+  /// Action type: 'post_message' | 'send_notification' | 'add_reaction' | 'assign_role'
+  actionType String
+  /// JSON object — action-specific configuration
+  config     String
+
+  createdAt DateTime @default(now())
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId])
+  @@map("workflow_actions")
+}
+
+model WorkflowExecution {
+  id          String @id @default(cuid())
+  workflowId  String
+  /// Event type that triggered this execution
+  triggeredBy String
+  /// 'success' | 'failed' | 'partial'
+  status      String @default("success")
+  /// Error message if status is 'failed'
+  error       String?
+
+  executedAt DateTime @default(now())
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId, executedAt(sort: Desc)])
+  @@map("workflow_executions")
+}
+
+// ---------------------------------------------------------------------------
+// Audit Log
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id          String  @id @default(cuid())
+  workspaceId String
+  actorId     String
+  /// Action identifier, e.g. 'MEMBER_ROLE_CHANGED', 'MEMBER_REMOVED', 'CHANNEL_ARCHIVED'
+  action      String
+  /// ID of the affected resource
+  targetId    String?
+  /// JSON object: key-value changes, e.g. { role: { from: 'MEMBER', to: 'ADMIN' } }
+  changes     String?
+
+  createdAt DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor     User      @relation("AuditLogs", fields: [actorId], references: [id])
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([actorId])
+  @@map("audit_logs")
 }

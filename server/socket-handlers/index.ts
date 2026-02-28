@@ -23,6 +23,11 @@ import { registerMessageHandlers } from './messages';
 import { registerPresenceHandlers } from './presence';
 import { registerTypingHandlers } from './typing';
 import { registerChannelHandlers } from './channels';
+import { registerPollHandlers } from './polls';
+import { registerCanvasHandlers } from './canvas';
+import { registerReadReceiptHandlers } from './read-receipts';
+import { registerCallHandlers } from './calls';
+import { registerHuddleHandlers } from './huddles';
 
 type AppServer = SocketIOServer<
   ClientToServerEvents,
@@ -55,6 +60,11 @@ export function registerHandlers(io: AppServer): void {
     registerMessageHandlers(socket);
     registerPresenceHandlers(socket);
     registerTypingHandlers(socket, io);
+    registerPollHandlers(socket);
+    registerCanvasHandlers(socket);
+    registerReadReceiptHandlers(socket);
+    registerCallHandlers(socket, io);
+    registerHuddleHandlers(socket, io);
 
     // Log disconnections (presence cleanup is handled by registerPresenceHandlers)
     socket.on('disconnect', (reason) => {

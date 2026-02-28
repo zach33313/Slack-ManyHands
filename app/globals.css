@@ -57,3 +57,41 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* -----------------------------------------------------------------------
+ * Message edit flash animation
+ * Applied via AnimatedMessage when message.updatedAt changes.
+ * Uses a CSS keyframe so the yellow highlight fades out automatically.
+ * ----------------------------------------------------------------------- */
+@keyframes editFlash {
+  0% {
+    background-color: rgba(234, 179, 8, 0.22);
+  }
+  20% {
+    background-color: rgba(234, 179, 8, 0.22);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.message-just-edited {
+  animation: editFlash 600ms ease-out forwards;
+}
+
+/* -----------------------------------------------------------------------
+ * Presence dot pulse animation for online status transition
+ * Used on status indicator dots (opacity oscillates 0.5 → 1.0 → 0.5).
+ * ----------------------------------------------------------------------- */
+@keyframes presencePulse {
+  0%, 100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.presence-pulse {
+  animation: presencePulse 2s ease-in-out infinite;
+}

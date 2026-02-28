@@ -17,6 +17,10 @@ import type { Channel, MessageWithMeta } from '@/shared/types';
 import { TypingIndicator } from '@/presence/components/TypingIndicator';
 import { MessageList } from '@/messages/components/MessageList';
 import MessageComposer from '@/messages/components/MessageComposer';
+import { useMarkChannelRead } from '@/messages/components/ReadReceipt';
+import { CanvasTab, type ChannelTab } from '@/canvas/components/CanvasTab';
+import { CanvasEditor } from '@/canvas/components/CanvasEditor';
+import { HuddleBar } from '@/calls/components/HuddleBar';
 
 interface ChannelViewProps {
   channel: Channel & { memberCount: number };
@@ -41,10 +45,17 @@ export function ChannelView({
   const markChannelRead = useAppStore((s) => s.markChannelRead);
   const setSidebarOpen = useAppStore((s) => s.setSidebarOpen);
   const setRightPanelView = useAppStore((s) => s.setRightPanelView);
+  const currentUserName = useAppStore((s) => s.user?.name ?? '');
 
   const setMessages = useMessagesStore((s) => s.setMessages);
+  const messages = useMessagesStore((s) => s.messagesByChannel[channel.id] ?? initialMessages);
+  const lastMessageId = messages[messages.length - 1]?.id ?? '';
+
+  // Emit channel:mark-read so read receipts update for other participants
+  useMarkChannelRead(channel.id, lastMessageId);
 
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<ChannelTab>('messages');
 
   const isDM = channel.type === 'DM';
   const isGroupDM = channel.type === 'GROUP_DM';
@@ -120,26 +131,49 @@ export function ChannelView({
         </div>
       </header>
 
+      {/* Tab bar — Messages | Canvas */}
+      <CanvasTab activeTab={activeTab} onTabChange={setActiveTab} />
+
       {/* Messages Area — virtualized with react-virtuoso */}
-      <div className="flex-1 min-h-0">
-        <MessageList
-          channelId={channel.id}
-          channelName={channel.name}
-          currentUserId={currentUserId}
-        />
-      </div>
+      {activeTab === 'messages' && (
+        <div className="flex-1 min-h-0">
+          <MessageList
+            channelId={channel.id}
+            channelName={channel.name}
+            currentUserId={currentUserId}
+          />
+        </div>
+      )}
 
-      {/* Typing Indicator */}
-      <TypingIndicator channelId={channel.id} className="px-4 py-1" />
+      {/* Canvas Area — collaborative Yjs editor */}
+      {activeTab === 'canvas' && (
+        <div className="flex-1 min-h-0 overflow-auto">
+          <CanvasEditor
+            channelId={channel.id}
+            currentUserId={currentUserId}
+            currentUserName={currentUserName}
+          />
+        </div>
+      )}
 
-      {/* Message Composer — Tiptap rich text editor */}
-      <div className="border-t shrink-0">
-        <MessageComposer
-          channelId={channel.id}
-          channelName={displayName}
-          workspaceId={channel.workspaceId}
-        />
-      </div>
+      {/* Typing Indicator (messages tab only) */}
+      {activeTab === 'messages' && (
+        <TypingIndicator channelId={channel.id} className="px-4 py-1" />
+      )}
+
+      {/* Active huddle bar */}
+      <HuddleBar channelId={channel.id} />
+
+      {/* Message Composer — Tiptap rich text editor (messages tab only) */}
+      {activeTab === 'messages' && (
+        <div className="border-t shrink-0">
+          <MessageComposer
+            channelId={channel.id}
+            channelName={displayName}
+            workspaceId={channel.workspaceId}
+          />
+        </div>
+      )}
 
       {/* Channel Invite Dialog */}
       {!isDM && !isGroupDM && (

@@ -20,11 +20,22 @@ import {
   Trash2,
   Link2,
   BookmarkMinus,
+  Forward,
 } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
 import { useSocket } from '@/shared/hooks/useSocket';
 import { ReactionPicker } from './ReactionPicker';
 import { useMessagesStore } from '@/messages/store';
+import { ForwardDialog } from './ForwardDialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import type { MessageWithMeta } from '@/shared/types';
 
 interface MessageActionsProps {
   messageId: string;
@@ -36,6 +47,12 @@ interface MessageActionsProps {
   onEdit?: () => void;
   /** Callback when the user clicks "Reply in thread" */
   onReply?: () => void;
+  /** Full message object needed for ForwardDialog */
+  message?: MessageWithMeta;
+  /** Workspace ID for ForwardDialog channel lookup */
+  workspaceId?: string;
+  /** When true, render the toolbar below the message instead of above to avoid clipping */
+  isFirstMessage?: boolean;
 }
 
 const ActionButton = React.forwardRef<
@@ -73,9 +90,14 @@ export function MessageActions({
   isPinned,
   onEdit,
   onReply,
+  message,
+  workspaceId,
+  isFirstMessage = false,
 }: MessageActionsProps) {
   const socket = useSocket();
   const setActiveThread = useMessagesStore((s) => s.setActiveThread);
+  const [forwardOpen, setForwardOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   const handleReply = useCallback(() => {
     setActiveThread(messageId);
@@ -96,10 +118,12 @@ export function MessageActions({
   }, [messageId, isPinned]);
 
   const handleDelete = useCallback(() => {
-    if (!window.confirm('Are you sure you want to delete this message? This cannot be undone.')) {
-      return;
-    }
+    setDeleteDialogOpen(true);
+  }, []);
+
+  const handleConfirmDelete = useCallback(() => {
     socket.emit('message:delete', { messageId });
+    setDeleteDialogOpen(false);
   }, [messageId, socket]);
 
   const handleCopyLink = useCallback(() => {
@@ -120,7 +144,8 @@ export function MessageActions({
   return (
     <div
       className={cn(
-        'absolute -top-4 right-2 z-10 flex items-center gap-0.5',
+        'absolute right-2 z-10 flex items-center gap-0.5',
+        isFirstMessage ? 'top-full mt-1' : 'top-0',
         'rounded-md border border-gray-200 bg-white px-0.5 py-0.5 shadow-sm dark:border-gray-700 dark:bg-gray-800'
       )}
     >
@@ -209,9 +234,60 @@ export function MessageActions({
               <BookmarkMinus className="h-4 w-4" />
               Mark unread
             </DropdownMenu.Item>
+
+            {message && workspaceId && (
+              <DropdownMenu.Item
+                className={cn(
+                  'flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-gray-700 dark:text-gray-300',
+                  'outline-none hover:bg-gray-100 focus:bg-gray-100 dark:hover:bg-gray-700 dark:focus:bg-gray-700'
+                )}
+                onSelect={() => setForwardOpen(true)}
+              >
+                <Forward className="h-4 w-4" />
+                Forward message
+              </DropdownMenu.Item>
+            )}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
+
+      {/* Forward dialog (rendered outside the dropdown to avoid portal z-index issues) */}
+      {message && workspaceId && (
+        <ForwardDialog
+          open={forwardOpen}
+          onOpenChange={setForwardOpen}
+          message={message}
+          workspaceId={workspaceId}
+        />
+      )}
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete message</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this message? This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <button
+              type="button"
+              onClick={() => setDeleteDialogOpen(false)}
+              className="inline-flex items-center justify-center rounded-md border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmDelete}
+              className="inline-flex items-center justify-center rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90"
+            >
+              Delete
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

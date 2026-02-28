@@ -14,6 +14,8 @@ const mockPrismaMessage = {
   create: jest.fn(),
   findUnique: jest.fn(),
   update: jest.fn(),
+  findMany: jest.fn(),
+  count: jest.fn(),
 };
 
 const mockPrismaReaction = {
@@ -30,12 +32,33 @@ const mockPrismaUser = {
   findUnique: jest.fn(),
 };
 
+const mockPrismaChannelMember = {
+  findUnique: jest.fn(),
+  findMany: jest.fn(),
+};
+
+const mockPrismaChannel = {
+  findUnique: jest.fn(),
+};
+
+const mockPrismaNotification = {
+  create: jest.fn(),
+};
+
+const mockPrismaWorkspaceMember = {
+  findUnique: jest.fn(),
+};
+
 jest.mock('@prisma/client', () => ({
   PrismaClient: jest.fn().mockImplementation(() => ({
     message: mockPrismaMessage,
     reaction: mockPrismaReaction,
     fileAttachment: mockPrismaFileAttachment,
     user: mockPrismaUser,
+    channelMember: mockPrismaChannelMember,
+    channel: mockPrismaChannel,
+    notification: mockPrismaNotification,
+    workspaceMember: mockPrismaWorkspaceMember,
   })),
 }));
 
@@ -43,6 +66,10 @@ jest.mock('../../shared/lib/constants', () => ({
   channelRoom: (id: string) => `channel:${id}`,
   userRoom: (id: string) => `user:${id}`,
   workspaceRoom: (id: string) => `workspace:${id}`,
+}));
+
+jest.mock('../../workflows/engine', () => ({
+  executeWorkflowsForEvent: jest.fn().mockResolvedValue(undefined),
 }));
 
 import { registerMessageHandlers } from '../../server/socket-handlers/messages';
@@ -69,6 +96,19 @@ describe('Message Handlers', () => {
         to: mockNspTo,
       },
     };
+
+    // Default: user is a channel member (required for message:send membership check)
+    mockPrismaChannelMember.findUnique.mockResolvedValue({ channelId: 'ch-1', userId: 'user-1' });
+    // Default: no other channel members (skips unread:update and DM notification loops)
+    mockPrismaChannelMember.findMany.mockResolvedValue([]);
+    // Default: channel not found (skips notification + workflow blocks)
+    mockPrismaChannel.findUnique.mockResolvedValue(null);
+    // Default: zero unread count
+    mockPrismaMessage.count.mockResolvedValue(0);
+    // Default: no thread participants
+    mockPrismaMessage.findMany.mockResolvedValue([]);
+    // Default: notification created successfully
+    mockPrismaNotification.create.mockResolvedValue({ id: 'notif-1', createdAt: new Date() });
 
     registerMessageHandlers(socket);
   });

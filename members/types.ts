@@ -61,6 +61,8 @@ export interface UserProfile {
   statusText: string | null;
   statusEmoji: string | null;
   timezone: string | null;
+  /** Do Not Disturb expiration — null means DND is not active */
+  dndUntil?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

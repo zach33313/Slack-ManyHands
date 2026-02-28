@@ -4,6 +4,7 @@ import { prisma } from '@/shared/lib/prisma';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { RightPanel } from '@/components/layout/RightPanel';
 import { WorkspaceHydrator } from '@/components/layout/WorkspaceHydrator';
+import { KeyboardShortcutsOverlay } from '@/components/layout/KeyboardShortcutsOverlay';
 import type { ChannelType } from '@/shared/types';
 
 interface WorkspaceLayoutProps {
@@ -146,8 +147,9 @@ export default async function WorkspaceLayout({
 
   // Merge DM channels into the channels array (if not already there)
   const existingChannelIds = new Set(channels.map((c) => c.id));
-  for (const dm of dmChannelsRaw) {
-    if (!existingChannelIds.has(dm.id)) {
+  const newDmChannels = dmChannelsRaw.filter((dm) => !existingChannelIds.has(dm.id));
+  const dmResults = await Promise.all(
+    newDmChannels.map(async (dm) => {
       const lastRead = lastReadMap.get(dm.id);
       let unreadCount = 0;
       if (lastRead) {
@@ -160,7 +162,7 @@ export default async function WorkspaceLayout({
           },
         });
       }
-      channels.push({
+      return {
         id: dm.id,
         workspaceId: dm.workspaceId,
         name: dm.name,
@@ -171,9 +173,10 @@ export default async function WorkspaceLayout({
         createdAt: dm.createdAt,
         memberCount: dm._count.members,
         unreadCount,
-      });
-    }
-  }
+      };
+    })
+  );
+  channels.push(...dmResults);
 
   // Fetch all workspaces user belongs to (for workspace switcher)
   const memberships = await prisma.workspaceMember.findMany({
@@ -214,6 +217,8 @@ export default async function WorkspaceLayout({
         {children}
       </div>
       <RightPanel />
+      {/* Global keyboard shortcuts overlay — renders its own portal, triggered by ? or Cmd+/ */}
+      <KeyboardShortcutsOverlay />
     </>
   );
 }

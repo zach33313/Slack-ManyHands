@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2021",
     "module": "CommonJS",
     "moduleResolution": "node",
     "outDir": "dist/server",
@@ -14,5 +14,5 @@
       "@/*": ["./*"]
     }
   },
-  "include": ["server.ts", "server/**/*.ts", "shared/**/*.ts", "auth/**/*.ts", "__tests__/**/*.ts", "__tests__/**/*.tsx"]
+  "include": ["server.ts", "server/**/*.ts", "shared/**/*.ts", "auth/**/*.ts", "workflows/**/*.ts", "__tests__/**/*.ts", "__tests__/**/*.tsx"]
 }

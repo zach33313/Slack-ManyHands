@@ -21,7 +21,9 @@
 
 'use client';
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import SlackEditor from '@/components/editor/SlackEditor';
+import DOMPurify from 'dompurify';
 import { useRouter } from 'next/navigation';
 import type { MessageWithMeta, TiptapJSON, TiptapNode, MemberRole } from '@/shared/types';
 import { cn, formatMessageTime, formatRelativeTime, getInitials, isInlineImage, formatFileSize } from '@/shared/lib/utils';
@@ -31,9 +33,14 @@ import { format } from 'date-fns';
 import { useSocket } from '@/shared/hooks/useSocket';
 import { useAppStore } from '@/store';
 import { openDM } from '@/channels/actions';
-import { ReactionBar } from './ReactionBar';
+import { AnimatedReactionBar } from './AnimatedReactionBar';
 import { MessageActions } from './MessageActions';
 import { useMessagesStore } from '@/messages/store';
+import { AudioPlayer } from './AudioPlayer';
+import { PollDisplay } from '@/polls/components/PollDisplay';
+import { LinkPreviewCard } from '@/link-previews/components/LinkPreviewCard';
+import type { LinkPreviewData } from '@/link-previews/types';
+import type { Poll } from '@/polls/types';
 
 interface MessageItemProps {
   message: MessageWithMeta;
@@ -45,6 +52,8 @@ interface MessageItemProps {
   channelName?: string;
   /** Whether this message is rendered inside a thread panel (hides thread summary) */
   isThreadView?: boolean;
+  /** When true, the hover actions toolbar renders below the message to avoid viewport clipping */
+  isFirstMessage?: boolean;
 }
 
 /** Threshold in ms for compact mode: 5 minutes */
@@ -62,6 +71,46 @@ function shouldCompact(
   const msgDate = new Date(message.createdAt);
   const prevDate = new Date(previousMessage.createdAt);
   return msgDate.getTime() - prevDate.getTime() < COMPACT_THRESHOLD_MS;
+}
+
+/** DOMPurify allowlist — only the tags/attrs produced by renderTiptapContent.
+ *  Typed as a plain object so this compiles before @types/dompurify is installed.
+ */
+const DOMPURIFY_CONFIG = {
+  ALLOWED_TAGS: [
+    'p', 'br', 'strong', 'em', 's', 'u', 'code', 'pre',
+    'a', 'ul', 'ol', 'li', 'blockquote',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'span', 'hr', 'img',
+  ] as string[],
+  ALLOWED_ATTR: [
+    'href', 'target', 'rel',  // links
+    'class',                   // Tailwind utilities
+    'title',                   // tooltips
+    'data-language',           // code block language tag
+    'src', 'alt', 'loading',   // images / GIFs
+  ] as string[],
+  KEEP_CONTENT: true,
+  RETURN_DOM: false as const,
+  RETURN_DOM_FRAGMENT: false as const,
+};
+
+/**
+ * Sanitize an HTML string with DOMPurify.
+ * On the server (SSR, no DOM), return an empty string so no unsanitized HTML
+ * is included in the server-rendered payload. The prose div is rendered with
+ * suppressHydrationWarning so React ignores the SSR→client content difference,
+ * and DOMPurify sanitizes the content on first client render.
+ */
+function sanitizeHtml(html: string): string {
+  if (typeof window === 'undefined') {
+    // SSR: DOMPurify cannot run without a DOM. Return empty string so the
+    // server-rendered HTML payload contains no unsanitized user content.
+    return '';
+  }
+  // DOMPurify.sanitize with RETURN_DOM:false returns string|TrustedHTML;
+  // we cast via unknown since we know RETURN_DOM is false.
+  return DOMPurify.sanitize(html, DOMPURIFY_CONFIG) as unknown as string;
 }
 
 /** Render Tiptap JSON to simple HTML string */
@@ -88,11 +137,28 @@ function renderTiptapContent(content: TiptapJSON): string {
               text = `<s>${text}</s>`;
               break;
             case 'code':
-              text = `<code class="rounded bg-gray-100 px-1 py-0.5 text-sm font-mono text-pink-600">${text}</code>`;
+              text = `<code class="rounded bg-gray-100 dark:bg-gray-800 px-1 py-0.5 text-sm font-mono text-pink-600 dark:text-pink-400">${text}</code>`;
               break;
-            case 'link':
-              text = `<a href="${escapeHtml(String(mark.attrs?.href ?? ''))}" target="_blank" rel="noopener noreferrer" class="text-blue-600 underline hover:text-blue-800">${text}</a>`;
+            case 'link': {
+              const rawHref = String(mark.attrs?.href ?? '');
+              // Validate href via URL parsing — blocks javascript:, data:, and any
+              // encoding tricks (java\nscript:, j&#97;vascript:, etc.) by normalising
+              // through the URL constructor before inspecting the protocol.
+              let safeHref = '#';
+              try {
+                const parsed = new URL(rawHref);
+                if (['http:', 'https:', 'mailto:'].includes(parsed.protocol)) {
+                  safeHref = rawHref;
+                }
+              } catch {
+                // new URL() throws on relative paths — allow root-relative only
+                if (rawHref.startsWith('/') && !rawHref.startsWith('//')) {
+                  safeHref = rawHref;
+                }
+              }
+              text = `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer" class="text-blue-600 underline hover:text-blue-800">${text}</a>`;
               break;
+            }
             case 'underline':
               text = `<u>${text}</u>`;
               break;
@@ -108,8 +174,16 @@ function renderTiptapContent(content: TiptapJSON): string {
     switch (node.type) {
       case 'doc':
         return children;
-      case 'paragraph':
+      case 'paragraph': {
+        const audiometa = node.attrs?.audioMetadata as { fileName?: string; mimeType?: string; size?: number; duration?: number } | undefined;
+        if (audiometa && typeof audiometa.duration === 'number' && typeof audiometa.size === 'number') {
+          const durationStr = formatDuration(audiometa.duration);
+          const sizeStr = formatFileSize(audiometa.size);
+          const ext = (audiometa.mimeType ?? '').split('/')[1]?.split(';')[0]?.toUpperCase() ?? 'AUDIO';
+          return `<p class="mb-1 last:mb-0 flex items-center gap-1.5 flex-wrap"><span>🎙️ Voice message</span><span class="text-muted-foreground">·</span><span class="text-muted-foreground">${escapeHtml(durationStr)}</span><span class="text-muted-foreground">·</span><span class="text-muted-foreground">${escapeHtml(sizeStr)}</span><span class="inline-flex items-center rounded bg-gray-100 dark:bg-gray-700 px-1 py-0.5 text-xs font-medium text-gray-600 dark:text-gray-300">${escapeHtml(ext)}</span></p>`;
+        }
         return `<p class="mb-1 last:mb-0">${children || '<br>'}</p>`;
+      }
       case 'heading': {
         const level = (node.attrs?.level as number) ?? 2;
         return `<h${level} class="font-bold mb-1">${children}</h${level}>`;
@@ -122,21 +196,28 @@ function renderTiptapContent(content: TiptapJSON): string {
         return `<li class="mb-0.5">${children}</li>`;
       case 'codeBlock': {
         const lang = (node.attrs?.language as string) ?? '';
-        return `<pre class="rounded bg-gray-900 p-3 mb-1 overflow-x-auto"><code class="text-sm font-mono text-gray-100" data-language="${escapeHtml(lang)}">${children}</code></pre>`;
+        return `<pre class="rounded bg-gray-900 dark:bg-gray-950 p-3 mb-1 overflow-x-auto"><code class="text-sm font-mono text-gray-100 dark:text-gray-200" data-language="${escapeHtml(lang)}">${children}</code></pre>`;
       }
       case 'blockquote':
-        return `<blockquote class="border-l-4 border-gray-300 pl-3 italic text-gray-600 mb-1">${children}</blockquote>`;
+        return `<blockquote class="border-l-4 border-gray-300 dark:border-gray-600 pl-3 italic text-gray-600 dark:text-gray-400 mb-1">${children}</blockquote>`;
       case 'horizontalRule':
-        return '<hr class="border-gray-200 my-2" />';
+        return '<hr class="border-gray-200 dark:border-gray-700 my-2" />';
       case 'hardBreak':
         return '<br />';
       case 'mention': {
         const label = (node.attrs?.label as string) ?? (node.attrs?.id as string) ?? '';
-        return `<span class="mention-highlight rounded bg-blue-100 px-1 py-0.5 text-blue-800 font-medium">@${escapeHtml(label)}</span>`;
+        return `<span class="mention-highlight rounded bg-blue-100 dark:bg-blue-900 px-1 py-0.5 text-blue-800 dark:text-blue-200 font-medium">@${escapeHtml(label)}</span>`;
       }
       case 'emoji': {
         const name = (node.attrs?.name as string) ?? '';
         return `<span class="emoji" title=":${escapeHtml(name)}:">${children || `:${escapeHtml(name)}:`}</span>`;
+      }
+      case 'image': {
+        const src = escapeHtml(String(node.attrs?.src ?? ''));
+        const alt = escapeHtml(String(node.attrs?.alt ?? ''));
+        const title = escapeHtml(String(node.attrs?.title ?? ''));
+        if (!src) return '';
+        return `<img src="${src}" alt="${alt}" title="${title}" class="max-w-full rounded" loading="lazy" />`;
       }
       default:
         return children;
@@ -155,6 +236,46 @@ function escapeHtml(str: string): string {
     .replace(/'/g, '&#039;');
 }
 
+/** Format seconds as M:SS (e.g. 75 → "1:15", 15 → "0:15") */
+function formatDuration(seconds: number): string {
+  const totalSec = Math.max(0, Math.floor(seconds));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+/** URL_REGEX — matches the first http/https URL in a string */
+const URL_REGEX = /https?:\/\/[^\s<>"]+[^\s<>".,;:!?]/;
+
+/** Extracts the first URL from a plain-text string, or returns null */
+function extractFirstUrl(text: string): string | null {
+  const match = URL_REGEX.exec(text);
+  return match ? match[0] : null;
+}
+
+/** Hook: fetches a link preview for the first URL found in contentPlain */
+function useLinkPreview(contentPlain: string, hasFiles: boolean): LinkPreviewData | null {
+  const [preview, setPreview] = useState<LinkPreviewData | null>(null);
+
+  useEffect(() => {
+    if (hasFiles) return; // Don't show previews alongside files
+    const url = extractFirstUrl(contentPlain);
+    if (!url) return;
+
+    let cancelled = false;
+    fetch(`/api/link-preview?url=${encodeURIComponent(url)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: LinkPreviewData | null) => {
+        if (!cancelled && data) setPreview(data);
+      })
+      .catch(() => { /* swallow */ });
+
+    return () => { cancelled = true; };
+  }, [contentPlain, hasFiles]);
+
+  return preview;
+}
+
 /** Inline file attachment row */
 function FileAttachment({
   file,
@@ -162,6 +283,11 @@ function FileAttachment({
   file: MessageWithMeta['files'][number];
 }) {
   const isImage = isInlineImage(file.mimeType);
+  const isAudio = file.mimeType.startsWith('audio/');
+
+  if (isAudio) {
+    return <AudioPlayer src={file.url} label={file.name} />;
+  }
 
   if (isImage) {
     return (
@@ -206,15 +332,16 @@ export function MessageItem({
   currentUserId,
   channelName,
   isThreadView = false,
+  isFirstMessage = false,
 }: MessageItemProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [editContent, setEditContent] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
   const socket = useSocket();
   const router = useRouter();
   const currentWorkspace = useAppStore((s) => s.currentWorkspace);
   const setActiveThread = useMessagesStore((s) => s.setActiveThread);
+  const linkPreview = useLinkPreview(message.contentPlain, message.files.length > 0);
 
   // Build a MemberWithUser for the profile card from the message author
   const authorAsMember = useMemo(() => ({
@@ -251,51 +378,31 @@ export function MessageItem({
   const createdAt = new Date(message.createdAt);
   const absoluteTime = format(createdAt, 'EEEE, MMMM d, yyyy h:mm a');
 
-  // Render message content HTML
+  // Render message content HTML — URL-sanitized then DOMPurify-sanitized
   const contentHtml = useMemo(() => {
     if (message.isDeleted) return null;
     if (!message.content || !message.content.content) return null;
-    return renderTiptapContent(message.content);
+    const rawHtml = renderTiptapContent(message.content);
+    return sanitizeHtml(rawHtml);
   }, [message.content, message.isDeleted]);
 
   const handleStartEdit = useCallback(() => {
     setIsEditing(true);
-    setEditContent(message.contentPlain);
-  }, [message.contentPlain]);
+  }, []);
 
   const handleCancelEdit = useCallback(() => {
     setIsEditing(false);
-    setEditContent('');
   }, []);
 
-  const handleSaveEdit = useCallback(() => {
-    if (!editContent.trim()) return;
-    const content: TiptapJSON = {
-      type: 'doc',
-      content: [
-        {
-          type: 'paragraph',
-          content: [{ type: 'text', text: editContent.trim() }],
-        },
-      ],
-    };
+  const handleSaveEdit = useCallback((content: TiptapJSON, plainText: string) => {
+    if (!plainText.trim()) {
+      // Empty message — just close the editor without saving
+      setIsEditing(false);
+      return;
+    }
     socket.emit('message:edit', { messageId: message.id, content: content as unknown as Record<string, unknown> });
     setIsEditing(false);
-    setEditContent('');
-  }, [editContent, message.id, socket]);
-
-  const handleEditKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        handleSaveEdit();
-      }
-      if (e.key === 'Escape') {
-        handleCancelEdit();
-      }
-    },
-    [handleSaveEdit, handleCancelEdit]
-  );
+  }, [message.id, socket]);
 
   const handleOpenThread = useCallback(() => {
     setActiveThread(message.id);
@@ -328,24 +435,24 @@ export function MessageItem({
         <div className="flex items-start">
           <div className="w-[52px] shrink-0 pt-0.5 text-right">
             <span className="hidden text-[10px] text-muted-foreground group-hover:inline" title={absoluteTime}>
-              {format(createdAt, 'h:mm')}
+              {format(createdAt, 'h:mm a')}
             </span>
           </div>
           <div className="min-w-0 flex-1 pl-2">
             {isEditing ? (
-              <EditInput
-                value={editContent}
-                onChange={setEditContent}
-                onKeyDown={handleEditKeyDown}
-                onCancel={handleCancelEdit}
+              <TiptapEditInput
+                initialContent={message.content ?? ({ type: 'doc', content: [] } as TiptapJSON)}
+                workspaceId={currentWorkspace?.id ?? ''}
                 onSave={handleSaveEdit}
+                onCancel={handleCancelEdit}
               />
             ) : (
               <>
-                {contentHtml ? (
+                {contentHtml !== null ? (
                   <div
                     className="prose prose-sm max-w-none text-foreground"
                     dangerouslySetInnerHTML={{ __html: contentHtml }}
+                    suppressHydrationWarning
                   />
                 ) : (
                   <p className="text-sm text-foreground">{message.contentPlain}</p>
@@ -365,8 +472,21 @@ export function MessageItem({
               </div>
             )}
 
+            {/* Poll */}
+            {message.poll && (
+              <PollDisplay
+                poll={message.poll as unknown as Poll}
+                currentUserId={currentUserId}
+              />
+            )}
+
+            {/* Link preview */}
+            {!message.poll && linkPreview && (
+              <LinkPreviewCard preview={linkPreview} />
+            )}
+
             {/* Reactions */}
-            <ReactionBar
+            <AnimatedReactionBar
               messageId={message.id}
               reactions={message.reactions}
               currentUserId={currentUserId}
@@ -391,6 +511,9 @@ export function MessageItem({
             isPinned={false}
             onEdit={isOwnMessage ? handleStartEdit : undefined}
             onReply={handleOpenThread}
+            message={message}
+            workspaceId={currentWorkspace?.id}
+            isFirstMessage={isFirstMessage}
           />
         )}
       </div>
@@ -443,19 +566,19 @@ export function MessageItem({
 
           {/* Message content */}
           {isEditing ? (
-            <EditInput
-              value={editContent}
-              onChange={setEditContent}
-              onKeyDown={handleEditKeyDown}
-              onCancel={handleCancelEdit}
+            <TiptapEditInput
+              initialContent={message.content ?? ({ type: 'doc', content: [] } as TiptapJSON)}
+              workspaceId={currentWorkspace?.id ?? ''}
               onSave={handleSaveEdit}
+              onCancel={handleCancelEdit}
             />
           ) : (
             <>
-              {contentHtml ? (
+              {contentHtml !== null ? (
                 <div
                   className="prose prose-sm max-w-none text-foreground"
                   dangerouslySetInnerHTML={{ __html: contentHtml }}
+                  suppressHydrationWarning
                 />
               ) : (
                 <p className="text-sm text-foreground">{message.contentPlain}</p>
@@ -475,8 +598,21 @@ export function MessageItem({
             </div>
           )}
 
+          {/* Poll */}
+          {message.poll && (
+            <PollDisplay
+              poll={message.poll as unknown as Poll}
+              currentUserId={currentUserId}
+            />
+          )}
+
+          {/* Link preview */}
+          {!message.poll && linkPreview && (
+            <LinkPreviewCard preview={linkPreview} />
+          )}
+
           {/* Reactions */}
-          <ReactionBar
+          <AnimatedReactionBar
             messageId={message.id}
             reactions={message.reactions}
             currentUserId={currentUserId}
@@ -501,58 +637,50 @@ export function MessageItem({
           isPinned={false}
           onEdit={isOwnMessage ? handleStartEdit : undefined}
           onReply={handleOpenThread}
+          message={message}
+          workspaceId={currentWorkspace?.id}
+          isFirstMessage={isFirstMessage}
         />
       )}
     </div>
   );
 }
 
-/** Inline edit input when editing a message */
-function EditInput({
-  value,
-  onChange,
-  onKeyDown,
-  onCancel,
+/** Inline rich-text edit input — uses the full Tiptap editor pre-populated with existing content */
+function TiptapEditInput({
+  initialContent,
+  workspaceId,
   onSave,
+  onCancel,
 }: {
-  value: string;
-  onChange: (v: string) => void;
-  onKeyDown: (e: React.KeyboardEvent) => void;
+  initialContent: TiptapJSON;
+  workspaceId: string;
+  onSave: (content: TiptapJSON, plainText: string) => void;
   onCancel: () => void;
-  onSave: () => void;
 }) {
   return (
-    <div className="mt-1">
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onKeyDown}
-        className={cn(
-          'w-full rounded-md border border-blue-300 bg-white px-3 py-2 text-sm',
-          'resize-none outline-none ring-1 ring-blue-300 focus:ring-2 focus:ring-blue-500'
-        )}
-        rows={2}
-        autoFocus
+    <div
+      className="mt-1"
+      onKeyDown={(e) => { if (e.key === 'Escape') onCancel(); }}
+    >
+      <SlackEditor
+        onSubmit={onSave}
+        initialContent={initialContent}
+        workspaceId={workspaceId}
+        placeholder="Edit message..."
       />
       <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
         <span>
-          Press <kbd className="rounded bg-gray-100 px-1 font-mono">Enter</kbd> to save,{' '}
-          <kbd className="rounded bg-gray-100 px-1 font-mono">Esc</kbd> to cancel
+          Press <kbd className="rounded bg-gray-100 dark:bg-gray-700 px-1 font-mono">Enter</kbd> to save,{' '}
+          <kbd className="rounded bg-gray-100 dark:bg-gray-700 px-1 font-mono">Esc</kbd> to cancel
         </span>
         <div className="flex-1" />
         <button
           type="button"
           onClick={onCancel}
-          className="rounded px-2 py-1 text-muted-foreground hover:bg-gray-100"
+          className="rounded px-2 py-1 text-muted-foreground hover:bg-gray-100 dark:hover:bg-gray-700"
         >
           Cancel
-        </button>
-        <button
-          type="button"
-          onClick={onSave}
-          className="rounded bg-blue-600 px-2 py-1 text-white hover:bg-blue-700"
-        >
-          Save
         </button>
       </div>
     </div>

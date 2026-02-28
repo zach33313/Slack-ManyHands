@@ -176,6 +176,8 @@ export interface ReactionGroup {
   count: number;
   /** IDs of users who reacted with this emoji */
   userIds: string[];
+  /** Whether the currently authenticated user has reacted — populated in client contexts */
+  hasReacted?: boolean;
 }
 
 /** File attached to a message */
@@ -211,12 +213,37 @@ export interface Message {
   createdAt: Date;
 }
 
+/** A poll vote group as included with a message */
+export interface MessagePollVoteGroup {
+  option: string;
+  count: number;
+  userIds: string[];
+  percentage: number;
+}
+
+/** Poll attached to a message — included when a message was sent with /poll */
+export interface MessagePoll {
+  id: string;
+  messageId: string;
+  question: string;
+  options: string[];
+  isActive: boolean;
+  /** When true, voters may select more than one option */
+  multiChoice: boolean;
+  endsAt: Date;
+  votes: MessagePollVoteGroup[];
+  totalVotes: number;
+  createdAt: Date;
+}
+
 /** Message with hydrated relations — used in API responses and Socket.IO events */
 export interface MessageWithMeta extends Message {
   /** Hydrated author record */
   author: UserSummary;
   files: FileAttachment[];
   reactions: ReactionGroup[];
+  /** Attached poll, if the message was sent with /poll */
+  poll?: MessagePoll;
 }
 
 /** Input for creating a new message or thread reply */

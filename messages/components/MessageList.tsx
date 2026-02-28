@@ -15,12 +15,14 @@
  * - Empty state for channels with no messages
  * - Subscribes to Zustand store messagesByChannel[channelId]
  * - Listens to Socket.IO message:new, message:updated, message:deleted, reaction:updated events
+ * - Framer Motion: per-message entry animations, animated scroll button, badge bounce
  */
 
 'use client';
 
 import React, { useEffect, useCallback, useRef, useMemo, useState } from 'react';
 import { GroupedVirtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import { m, AnimatePresence } from 'framer-motion';
 import { Loader2, ArrowDown } from 'lucide-react';
 import type { MessageWithMeta } from '@/shared/types';
 import type { PaginatedResponse } from '@/shared/types/api';
@@ -28,7 +30,8 @@ import { cn, formatDaySeparator } from '@/shared/lib/utils';
 import { MESSAGES_PER_PAGE } from '@/shared/lib/constants';
 import { useSocket } from '@/shared/hooks/useSocket';
 import { useMessagesStore } from '@/messages/store';
-import { MessageItem } from './MessageItem';
+import { badgeBounce } from '@/shared/lib/animations';
+import { AnimatedMessage } from './AnimatedMessage';
 import { UnreadLine } from './UnreadLine';
 
 const EMPTY_MESSAGES: MessageWithMeta[] = [];
@@ -313,43 +316,63 @@ export function MessageList({ channelId, channelName, currentUserId }: MessageLi
               {/* UnreadLine before the first unread message */}
               {unreadIndex !== null && arrayIndex === unreadIndex && <UnreadLine />}
 
-              <MessageItem
+              {/* AnimatedMessage wraps MessageItem with enter/edit/delete animations */}
+              <AnimatedMessage
                 message={message}
                 previousMessage={previousMessage}
                 currentUserId={currentUserId}
                 channelName={channelName}
+                isFirstMessage={arrayIndex === 0}
               />
             </div>
           );
         }}
       />
 
-      {/* Scroll-to-bottom button with unread count badge */}
-      {!isAtBottom && (
-        <button
-          type="button"
-          onClick={scrollToBottom}
-          className={cn(
-            'absolute bottom-4 right-4 z-20',
-            'flex h-10 w-10 items-center justify-center',
-            'rounded-full border border-border bg-background shadow-lg',
-            'transition-all hover:bg-muted hover:shadow-xl'
-          )}
-          aria-label="Scroll to bottom"
-        >
-          <ArrowDown className="h-5 w-5 text-muted-foreground" />
-          {unseenCount > 0 && (
-            <span
-              className={cn(
-                'absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center',
-                'rounded-full bg-blue-600 px-1.5 text-[10px] font-bold text-white'
+      {/* Animated scroll-to-bottom button with badge bounce */}
+      <AnimatePresence>
+        {!isAtBottom && (
+          <m.button
+            key="scroll-to-bottom"
+            type="button"
+            onClick={scrollToBottom}
+            initial={{ opacity: 0, y: 20, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.9 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.95 }}
+            className={cn(
+              'absolute bottom-4 right-4 z-20',
+              'flex h-10 w-10 items-center justify-center',
+              'rounded-full border border-border bg-background shadow-lg',
+              'hover:shadow-xl'
+            )}
+            aria-label="Scroll to bottom"
+          >
+            <ArrowDown className="h-5 w-5 text-muted-foreground" />
+
+            {/* Animated unread badge */}
+            <AnimatePresence>
+              {unseenCount > 0 && (
+                <m.span
+                  key={`badge-${unseenCount}`}
+                  variants={badgeBounce}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  className={cn(
+                    'absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center',
+                    'rounded-full bg-blue-600 px-1.5 text-[10px] font-bold text-white'
+                  )}
+                >
+                  {unseenCount > 99 ? '99+' : unseenCount}
+                </m.span>
               )}
-            >
-              {unseenCount > 99 ? '99+' : unseenCount}
-            </span>
-          )}
-        </button>
-      )}
+            </AnimatePresence>
+          </m.button>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

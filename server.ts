@@ -21,6 +21,7 @@ import next from 'next';
 import { Server as SocketIOServer } from 'socket.io';
 import { applyAuthMiddleware } from './server/socket-auth';
 import { registerHandlers } from './server/socket-handlers';
+import { startScheduledMessagesCron } from './server/cron/scheduled-messages';
 import type {
   ClientToServerEvents,
   ServerToClientEvents,
@@ -69,8 +70,12 @@ app.prepare().then(() => {
   // Apply NextAuth JWT authentication middleware to validate every connection
   applyAuthMiddleware(io);
 
-  // Register all domain event handlers (messages, presence, typing, channels)
+  // Register all domain event handlers (messages, presence, typing, channels,
+  // polls, canvas, read receipts)
   registerHandlers(io);
+
+  // Start background cron jobs (must run after Socket.IO is initialized)
+  startScheduledMessagesCron();
 
   const hostname = process.env.HOSTNAME || '0.0.0.0';
   httpServer.listen(port, hostname, () => {

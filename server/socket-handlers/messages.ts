@@ -17,12 +17,13 @@
 import type { Socket } from 'socket.io';
 import { prisma } from '../../shared/lib/prisma';
 import { channelRoom, userRoom } from '../../shared/lib/constants';
-import type { MessageWithMeta, ReactionGroup, NotificationType } from '../../shared/types';
+import type { MessageWithMeta, MessagePoll, ReactionGroup, NotificationType } from '../../shared/types';
 import type {
   ClientToServerEvents,
   ServerToClientEvents,
   SocketData,
 } from '../../shared/types/socket';
+import { executeWorkflowsForEvent } from '../../workflows/engine';
 
 type AppSocket = Socket<
   ClientToServerEvents,
@@ -59,6 +60,13 @@ async function getMessageWithMeta(messageId: string): Promise<MessageWithMeta | 
           userId: true,
         },
       },
+      poll: {
+        include: {
+          votes: {
+            select: { userId: true, option: true },
+          },
+        },
+      },
     },
   });
 
@@ -73,6 +81,40 @@ async function getMessageWithMeta(messageId: string): Promise<MessageWithMeta | 
     content = JSON.parse(msg.contentJson);
   } catch {
     content = { type: 'doc', content: [] };
+  }
+
+  // Build poll with aggregated vote groups if present
+  let poll: MessagePoll | undefined;
+  if (msg.poll) {
+    const voteMap = new Map<string, string[]>();
+    for (const v of msg.poll.votes) {
+      const arr = voteMap.get(v.option) ?? [];
+      arr.push(v.userId);
+      voteMap.set(v.option, arr);
+    }
+    const totalVotes = msg.poll.votes.length;
+    const options: string[] = JSON.parse(msg.poll.options) as string[];
+    const votes = options.map((opt) => {
+      const userIds = voteMap.get(opt) ?? [];
+      return {
+        option: opt,
+        count: userIds.length,
+        userIds,
+        percentage: totalVotes > 0 ? Math.round((userIds.length / totalVotes) * 100) : 0,
+      };
+    });
+    poll = {
+      id: msg.poll.id,
+      messageId: msg.poll.messageId,
+      question: msg.poll.question,
+      options,
+      isActive: msg.poll.isActive,
+      multiChoice: msg.poll.multiChoice,
+      endsAt: msg.poll.endsAt,
+      votes,
+      totalVotes,
+      createdAt: msg.poll.createdAt,
+    };
   }
 
   return {
@@ -103,6 +145,7 @@ async function getMessageWithMeta(messageId: string): Promise<MessageWithMeta | 
       height: f.height,
     })),
     reactions: reactionGroups,
+    poll,
   };
 }
 
@@ -139,24 +182,26 @@ async function getReactionGroups(messageId: string): Promise<ReactionGroup[]> {
 
 /**
  * Extracts plain text from a Tiptap JSON document.
- * Recursively walks the node tree and concatenates all text nodes.
+ * Recursively walks the node tree and concatenates all text nodes,
+ * adding newlines after block-level nodes (matches messages/actions.ts behaviour).
  */
 function extractPlainText(content: Record<string, unknown>): string {
-  const parts: string[] = [];
+  const blockTypes = new Set(['paragraph', 'heading', 'blockquote', 'codeBlock', 'listItem']);
 
-  function walk(node: Record<string, unknown>): void {
-    if (typeof node.text === 'string') {
-      parts.push(node.text);
-    }
+  function walk(node: Record<string, unknown>): string {
+    if (typeof node.text === 'string') return node.text;
+    if (node.type === 'hardBreak') return '\n';
     if (Array.isArray(node.content)) {
-      for (const child of node.content) {
-        walk(child as Record<string, unknown>);
-      }
+      const inner = (node.content as Record<string, unknown>[]).map(walk).join('');
+      return blockTypes.has(node.type as string) ? inner + '\n' : inner;
     }
+    return '';
   }
 
-  walk(content);
-  return parts.join(' ').trim();
+  const rootContent = Array.isArray(content.content)
+    ? (content.content as Record<string, unknown>[])
+    : [];
+  return rootContent.map(walk).join('').trim();
 }
 
 /**
@@ -193,10 +238,11 @@ export function registerMessageHandlers(socket: AppSocket): void {
    * in the response, and emits `message:new` to the channel room.
    * If parentId is set, also emits `thread:reply` and increments the parent's replyCount.
    */
-  socket.on('message:send', async ({ channelId, content, parentId, fileIds }) => {
+  socket.on('message:send', async ({ channelId, content, parentId, fileIds, poll: pollInput, audioMetadata }, ack) => {
     try {
       if (!channelId || !content) {
         console.warn(`[messages] message:send missing required fields from user ${userId}`);
+        ack?.({ ok: false, error: 'Missing required fields' });
         return;
       }
 
@@ -209,11 +255,47 @@ export function registerMessageHandlers(socket: AppSocket): void {
 
       if (!membership) {
         console.warn(`[messages] message:send — user ${userId} is not a member of channel ${channelId}`);
+        ack?.({ ok: false, error: 'You are not a member of this channel' });
         return;
       }
 
-      const contentJson = JSON.stringify(content);
-      const contentPlain = extractPlainText(content);
+      // Validate parentId if this is a thread reply
+      if (parentId) {
+        const parentMessage = await prisma.message.findUnique({
+          where: { id: parentId },
+          select: { channelId: true, isDeleted: true },
+        });
+        if (!parentMessage || parentMessage.channelId !== channelId || parentMessage.isDeleted) {
+          console.warn(
+            `[messages] message:send — invalid parentId ${parentId} for channel ${channelId} from user ${userId}`
+          );
+          ack?.({ ok: false, error: 'Invalid parent message' });
+          return;
+        }
+      }
+
+      // If audioMetadata was sent as a top-level payload field and the content
+      // paragraph does not already carry it in attrs, merge it in so the stored
+      // contentJson always has the full voice-message metadata.
+      let enrichedContent = content;
+      if (audioMetadata) {
+        const doc = content as { type?: string; content?: Array<{ type?: string; attrs?: Record<string, unknown> }> };
+        if (Array.isArray(doc.content) && doc.content.length > 0) {
+          const firstPara = doc.content[0];
+          if (firstPara.type === 'paragraph' && !firstPara.attrs?.audioMetadata) {
+            enrichedContent = {
+              ...doc,
+              content: [
+                { ...firstPara, attrs: { ...(firstPara.attrs ?? {}), audioMetadata } },
+                ...doc.content.slice(1),
+              ],
+            } as Record<string, unknown>;
+          }
+        }
+      }
+
+      const contentJson = JSON.stringify(enrichedContent);
+      const contentPlain = extractPlainText(enrichedContent);
 
       // Create the message in the database
       const message = await prisma.message.create({
@@ -237,6 +319,29 @@ export function registerMessageHandlers(socket: AppSocket): void {
         });
       }
 
+      // If a poll was included, create it linked to this message.
+      // Trim and deduplicate options (consistent with polls/actions.ts) to
+      // prevent split votes from duplicate or whitespace-padded entries.
+      if (pollInput && pollInput.question && Array.isArray(pollInput.options) && pollInput.options.length >= 2) {
+        try {
+          const dedupedOptions = [
+            ...new Set(pollInput.options.map((o: string) => o.trim()).filter(Boolean)),
+          ];
+          if (dedupedOptions.length >= 2) {
+            await prisma.poll.create({
+              data: {
+                messageId: message.id,
+                question: pollInput.question.trim(),
+                options: JSON.stringify(dedupedOptions),
+                endsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7-day default
+              },
+            });
+          }
+        } catch (e) {
+          console.error('[messages] Failed to create poll for message', message.id, e);
+        }
+      }
+
       // If this is a thread reply, increment the parent message's replyCount
       if (parentId) {
         await prisma.message.update({
@@ -247,16 +352,23 @@ export function registerMessageHandlers(socket: AppSocket): void {
 
       // Fetch the full message with author and relations
       const fullMessage = await getMessageWithMeta(message.id);
-      if (!fullMessage) return;
+      if (!fullMessage) {
+        ack?.({ ok: false, error: 'Failed to fetch created message' });
+        return;
+      }
 
-      // Emit to all sockets in the channel room
+      // Emit to all sockets in the channel room.
+      // Thread replies must NOT appear in the main channel feed, so only emit
+      // `message:new` for top-level messages. Replies get `thread:reply` only.
       const room = channelRoom(channelId);
-      socket.nsp.to(room).emit('message:new', fullMessage);
-
-      // If thread reply, also emit thread:reply event
       if (parentId) {
         socket.nsp.to(room).emit('thread:reply', fullMessage);
+      } else {
+        socket.nsp.to(room).emit('message:new', fullMessage);
       }
+
+      // Acknowledge success — the message is created and broadcast.
+      ack?.({ ok: true });
 
       // --- Notifications ---
       const notificationPreview = extractPlainText(content).slice(0, 100);
@@ -388,35 +500,54 @@ export function registerMessageHandlers(socket: AppSocket): void {
           }
         }
 
+        // --- Trigger workflow automation (fire-and-forget, non-blocking) ---
+        const workflowContext = {
+          workspaceId,
+          channelId,
+          messageId: message.id,
+          userId,
+          contentPlain,
+        };
+        void executeWorkflowsForEvent('message_posted', workflowContext).catch((err) => {
+          console.error('[messages] workflow execution error (message_posted):', err);
+        });
+        void executeWorkflowsForEvent('message_contains', workflowContext).catch((err) => {
+          console.error('[messages] workflow execution error (message_contains):', err);
+        });
+
         // --- Emit unread:update to all channel members (except sender) ---
         const allMembers = await prisma.channelMember.findMany({
           where: { channelId },
           select: { userId: true, lastReadAt: true },
         });
 
-        for (const member of allMembers) {
-          if (member.userId === userId) continue;
-          // Count unread messages for this member
-          const where: Record<string, unknown> = {
-            channelId,
-            isDeleted: false,
-            userId: { not: member.userId },
-          };
-          if (member.lastReadAt) {
-            where.createdAt = { gt: member.lastReadAt };
-          }
-          const unreadCount = await prisma.message.count({ where });
-          const hasMention = mentionedUserIds.includes(member.userId);
+        const otherMembers = allMembers.filter((m) => m.userId !== userId);
+        // Run all count queries concurrently instead of sequentially to avoid
+        // blocking the event loop with N round-trips for a channel with N members.
+        await Promise.all(
+          otherMembers.map(async (member) => {
+            const where: Record<string, unknown> = {
+              channelId,
+              isDeleted: false,
+              userId: { not: member.userId },
+            };
+            if (member.lastReadAt) {
+              where.createdAt = { gt: member.lastReadAt };
+            }
+            const unreadCount = await prisma.message.count({ where });
+            const hasMention = mentionedUserIds.includes(member.userId);
 
-          socket.nsp.to(userRoom(member.userId)).emit('unread:update', {
-            channelId,
-            unreadCount,
-            hasMention,
-          });
-        }
+            socket.nsp.to(userRoom(member.userId)).emit('unread:update', {
+              channelId,
+              unreadCount,
+              hasMention,
+            });
+          })
+        );
       }
     } catch (err) {
       console.error(`[messages] message:send error for user ${userId}:`, err);
+      ack?.({ ok: false, error: 'Server error processing message' });
     }
   });
 
@@ -495,6 +626,7 @@ export function registerMessageHandlers(socket: AppSocket): void {
           userId: true,
           channelId: true,
           isDeleted: true,
+          parentId: true,
           channel: { select: { workspaceId: true } },
         },
       });
@@ -535,6 +667,14 @@ export function registerMessageHandlers(socket: AppSocket): void {
         },
       });
 
+      // If this was a thread reply, decrement the parent's replyCount
+      if (existing.parentId) {
+        await prisma.message.update({
+          where: { id: existing.parentId },
+          data: { replyCount: { decrement: 1 } },
+        });
+      }
+
       // Emit deletion event to channel room
       socket.nsp
         .to(channelRoom(existing.channelId))
@@ -566,6 +706,16 @@ export function registerMessageHandlers(socket: AppSocket): void {
 
       if (!message) {
         console.warn(`[messages] message:react — message ${messageId} not found`);
+        return;
+      }
+
+      // Verify the user is a member of the message's channel
+      const membership = await prisma.channelMember.findUnique({
+        where: { channelId_userId: { channelId: message.channelId, userId } },
+        select: { channelId: true },
+      });
+      if (!membership) {
+        console.warn(`[messages] message:react — user ${userId} is not a member of channel ${message.channelId}`);
         return;
       }
 
@@ -616,6 +766,16 @@ export function registerMessageHandlers(socket: AppSocket): void {
 
       if (!message) {
         console.warn(`[messages] message:unreact — message ${messageId} not found`);
+        return;
+      }
+
+      // Verify the user is a member of the message's channel
+      const membership = await prisma.channelMember.findUnique({
+        where: { channelId_userId: { channelId: message.channelId, userId } },
+        select: { channelId: true },
+      });
+      if (!membership) {
+        console.warn(`[messages] message:unreact — user ${userId} is not a member of channel ${message.channelId}`);
         return;
       }
 

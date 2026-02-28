@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import { Toaster } from 'sonner';
 import { ThemeProvider } from '@/components/providers/theme-provider';
+import { MotionProvider } from '@/components/providers/motion-provider';
 import './globals.css';
 
 const inter = Inter({ subsets: ['latin'] });
@@ -25,7 +26,9 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          {children}
+          <MotionProvider>
+            {children}
+          </MotionProvider>
           <Toaster richColors position="bottom-right" />
         </ThemeProvider>
       </body>
