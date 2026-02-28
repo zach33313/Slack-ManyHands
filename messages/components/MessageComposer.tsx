@@ -1,0 +1,448 @@
+'use client'
+
+import { useState, useCallback, useRef, useEffect } from 'react'
+import SlackEditor from '@/components/editor/SlackEditor'
+import { useSocket } from '@/shared/hooks/useSocket'
+import { useAppStore } from '@/store'
+import { TYPING_TIMEOUT, MAX_FILE_SIZE } from '@/shared/lib/constants'
+import { cn } from '@/shared/lib/utils'
+import { formatFileSize } from '@/shared/lib/utils'
+import { X, FileIcon, ImageIcon, Paperclip } from 'lucide-react'
+import { toast } from 'sonner'
+import { updateProfile } from '@/members/actions'
+import { updateChannel, updateChannelNotifyPref } from '@/channels/actions'
+import type { TiptapJSON } from '@/shared/types'
+import type { MessageSendPayload } from '@/shared/types/socket'
+
+interface PendingFile {
+  file: File
+  id: string
+  uploadedId?: string
+  uploading: boolean
+  error?: string
+}
+
+interface MessageComposerProps {
+  channelId: string
+  channelName: string
+  workspaceId: string
+  parentId?: string
+  disabled?: boolean
+}
+
+/**
+ * Message composer wrapper used in channel and thread views.
+ * Wraps SlackEditor with:
+ * - Socket.IO `message:send` integration
+ * - File upload with drag-drop zone
+ * - Attached file chips (removable before sending)
+ * - Typing indicator emission (typing:start/typing:stop)
+ */
+export default function MessageComposer({
+  channelId,
+  channelName,
+  workspaceId,
+  parentId,
+  disabled = false,
+}: MessageComposerProps) {
+  const socket = useSocket()
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
+  const [isDragOver, setIsDragOver] = useState(false)
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isTypingRef = useRef(false)
+  const fileIdCounter = useRef(0)
+
+  // Clean up typing state on unmount or channel change
+  useEffect(() => {
+    return () => {
+      if (isTypingRef.current) {
+        socket.emit('typing:stop', { channelId })
+        isTypingRef.current = false
+      }
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current)
+        typingTimeoutRef.current = null
+      }
+    }
+  }, [channelId, socket])
+
+  // Emit typing indicators
+  const emitTypingStart = useCallback(() => {
+    if (!isTypingRef.current) {
+      socket.emit('typing:start', { channelId })
+      isTypingRef.current = true
+    }
+
+    // Reset the idle timer
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current)
+    }
+
+    typingTimeoutRef.current = setTimeout(() => {
+      socket.emit('typing:stop', { channelId })
+      isTypingRef.current = false
+      typingTimeoutRef.current = null
+    }, TYPING_TIMEOUT)
+  }, [channelId, socket])
+
+  const emitTypingStop = useCallback(() => {
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current)
+      typingTimeoutRef.current = null
+    }
+    if (isTypingRef.current) {
+      socket.emit('typing:stop', { channelId })
+      isTypingRef.current = false
+    }
+  }, [channelId, socket])
+
+  // Upload a single file to the server
+  const uploadFile = useCallback(
+    async (pendingFile: PendingFile) => {
+      if (pendingFile.file.size > MAX_FILE_SIZE) {
+        setPendingFiles((prev) =>
+          prev.map((f) =>
+            f.id === pendingFile.id
+              ? {
+                  ...f,
+                  uploading: false,
+                  error: `File too large (max ${formatFileSize(MAX_FILE_SIZE)})`,
+                }
+              : f
+          )
+        )
+        return
+      }
+
+      const formData = new FormData()
+      formData.append('file', pendingFile.file)
+
+      try {
+        const res = await fetch('/api/files', {
+          method: 'POST',
+          body: formData,
+        })
+
+        if (!res.ok) {
+          throw new Error(`Upload failed: ${res.statusText}`)
+        }
+
+        const data = await res.json()
+        const uploadedId = data.data?.id || data.id
+
+        setPendingFiles((prev) =>
+          prev.map((f) =>
+            f.id === pendingFile.id
+              ? { ...f, uploading: false, uploadedId }
+              : f
+          )
+        )
+      } catch (err) {
+        setPendingFiles((prev) =>
+          prev.map((f) =>
+            f.id === pendingFile.id
+              ? {
+                  ...f,
+                  uploading: false,
+                  error:
+                    err instanceof Error ? err.message : 'Upload failed',
+                }
+              : f
+          )
+        )
+      }
+    },
+    []
+  )
+
+  // Handle file addition (from drag-drop or attachment button)
+  const handleFileUpload = useCallback(
+    (files: File[]) => {
+      const newPendingFiles: PendingFile[] = files.map((file) => ({
+        file,
+        id: `file-${++fileIdCounter.current}`,
+        uploading: true,
+      }))
+
+      setPendingFiles((prev) => [...prev, ...newPendingFiles])
+
+      // Upload each file
+      newPendingFiles.forEach((pf) => uploadFile(pf))
+    },
+    [uploadFile]
+  )
+
+  // Remove a pending file
+  const removeFile = useCallback((fileId: string) => {
+    setPendingFiles((prev) => prev.filter((f) => f.id !== fileId))
+  }, [])
+
+  // Submit handler — sends message via Socket.IO, intercepts slash commands
+  const handleSubmit = useCallback(
+    async (content: TiptapJSON, plainText: string) => {
+      // Stop typing indicator
+      emitTypingStop()
+
+      const trimmed = plainText.trim()
+
+      // --- Slash command interception ---
+      if (trimmed.startsWith('/')) {
+        const parts = trimmed.split(/\s+/)
+        const command = parts[0].toLowerCase()
+        const args = trimmed.slice(command.length).trim()
+
+        switch (command) {
+          case '/status': {
+            // Parse: /status :emoji: text  OR  /status emoji text
+            let emoji = ''
+            let text = args
+            // Try to extract a leading emoji (single character or :shortcode:)
+            const emojiMatch = args.match(/^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F?)/u)
+            if (emojiMatch) {
+              emoji = emojiMatch[0]
+              text = args.slice(emoji.length).trim()
+            }
+            try {
+              const updated = await updateProfile({
+                statusEmoji: emoji || undefined,
+                statusText: text || undefined,
+              })
+              const store = useAppStore.getState()
+              if (store.user) {
+                store.setUser({
+                  ...store.user,
+                  statusEmoji: updated.statusEmoji,
+                  statusText: updated.statusText,
+                })
+              }
+              toast.success('Status updated')
+            } catch (err) {
+              toast.error('Failed to update status')
+            }
+            return
+          }
+          case '/away': {
+            const store = useAppStore.getState()
+            const isCurrentlyAway = store.user?.statusText === 'Away'
+            try {
+              const updated = await updateProfile({
+                statusEmoji: isCurrentlyAway ? '' : '🌙',
+                statusText: isCurrentlyAway ? '' : 'Away',
+              })
+              if (store.user) {
+                store.setUser({
+                  ...store.user,
+                  statusEmoji: updated.statusEmoji,
+                  statusText: updated.statusText,
+                })
+              }
+              toast.success(isCurrentlyAway ? 'Away status cleared' : 'Away status set')
+            } catch (err) {
+              toast.error('Failed to toggle away status')
+            }
+            return
+          }
+          case '/mute': {
+            try {
+              await updateChannelNotifyPref(channelId, 'NOTHING')
+              toast.success('Channel muted')
+            } catch (err) {
+              toast.error('Failed to mute channel')
+            }
+            return
+          }
+          case '/invite': {
+            const email = args.trim()
+            if (!email) {
+              toast.error('Usage: /invite user@example.com')
+              return
+            }
+            try {
+              const res = await fetch(`/api/channels/${channelId}/members`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email }),
+              })
+              if (!res.ok) {
+                const body = await res.json()
+                throw new Error(body.error?.message ?? 'Failed to invite')
+              }
+              toast.success(`Invited ${email} to the channel`)
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : 'Failed to invite user')
+            }
+            return
+          }
+          case '/topic': {
+            const topic = args.trim()
+            if (!topic) {
+              toast.error('Usage: /topic New topic here')
+              return
+            }
+            try {
+              await updateChannel(channelId, { topic })
+              toast.success('Channel topic updated')
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : 'Failed to update topic')
+            }
+            return
+          }
+          case '/remind': {
+            toast.info('Reminders are not yet supported')
+            return
+          }
+          default:
+            // Not a known command — fall through to send as message
+            break
+        }
+      }
+
+      // --- Normal message send ---
+      // Collect uploaded file IDs (skip files that failed or are still uploading)
+      const fileIds = pendingFiles
+        .filter((f) => f.uploadedId && !f.error)
+        .map((f) => f.uploadedId!)
+
+      const payload: MessageSendPayload = {
+        channelId,
+        content: content as unknown as Record<string, unknown>,
+        ...(parentId && { parentId }),
+        ...(fileIds.length > 0 && { fileIds }),
+      }
+
+      socket.emit('message:send', payload)
+
+      // Clear pending files after send
+      setPendingFiles([])
+    },
+    [channelId, parentId, pendingFiles, socket, emitTypingStop]
+  )
+
+  // Drag-and-drop handlers for the composer wrapper
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    // Only set false if we're leaving the container (not entering a child)
+    if (
+      e.currentTarget === e.target ||
+      !e.currentTarget.contains(e.relatedTarget as Node)
+    ) {
+      setIsDragOver(false)
+    }
+  }, [])
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      setIsDragOver(false)
+
+      const files = e.dataTransfer?.files
+      if (files?.length) {
+        handleFileUpload(Array.from(files))
+      }
+    },
+    [handleFileUpload]
+  )
+
+  // Attach typing start to editor activity
+  // We hook into editor updates by wrapping the SlackEditor in a div with keyboard listeners
+  const handleKeyDownCapture = useCallback(
+    (e: React.KeyboardEvent) => {
+      // Emit typing for any printable character (not just Enter/modifiers)
+      if (
+        e.key.length === 1 ||
+        e.key === 'Backspace' ||
+        e.key === 'Delete'
+      ) {
+        emitTypingStart()
+      }
+    },
+    [emitTypingStart]
+  )
+
+  const placeholderText = parentId
+    ? 'Reply...'
+    : `Message #${channelName}`
+
+  const hasFilesUploading = pendingFiles.some((f) => f.uploading)
+
+  return (
+    <div
+      className={cn('relative px-4 pb-4', isDragOver && 'ring-2 ring-primary/50 rounded-lg')}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drag overlay indicator */}
+      {isDragOver && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-primary/5 border-2 border-dashed border-primary/30 pointer-events-none">
+          <div className="flex items-center gap-2 text-sm font-medium text-primary">
+            <Paperclip className="h-5 w-5" />
+            Drop files to upload
+          </div>
+        </div>
+      )}
+
+      {/* Pending file attachments */}
+      {pendingFiles.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {pendingFiles.map((pf) => (
+            <div
+              key={pf.id}
+              className={cn(
+                'flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm',
+                pf.error
+                  ? 'border-destructive/50 bg-destructive/5 text-destructive'
+                  : 'border-border bg-muted/50'
+              )}
+            >
+              {pf.file.type.startsWith('image/') ? (
+                <ImageIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
+              <span className="max-w-[150px] truncate">{pf.file.name}</span>
+              <span className="text-xs text-muted-foreground">
+                {formatFileSize(pf.file.size)}
+              </span>
+              {pf.uploading && (
+                <span className="text-xs text-muted-foreground animate-pulse">
+                  Uploading...
+                </span>
+              )}
+              {pf.error && (
+                <span className="text-xs text-destructive">{pf.error}</span>
+              )}
+              <button
+                type="button"
+                onClick={() => removeFile(pf.id)}
+                className="ml-1 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                aria-label={`Remove ${pf.file.name}`}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Editor wrapper with keyboard capture for typing indicator */}
+      <div onKeyDownCapture={handleKeyDownCapture}>
+        <SlackEditor
+          onSubmit={handleSubmit}
+          placeholder={placeholderText}
+          disabled={disabled || hasFilesUploading}
+          workspaceId={workspaceId}
+          onFileUpload={handleFileUpload}
+        />
+      </div>
+    </div>
+  )
+}

@@ -1,0 +1,155 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useSocket } from '@/shared/hooks/useSocket';
+import { useAppStore } from '@/store';
+import { useMessagesStore } from '@/messages/store';
+import {
+  Hash,
+  Lock,
+  Users,
+  UserPlus,
+  Menu,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { ChannelInviteDialog } from '@/channels/components/ChannelInviteDialog';
+import type { Channel, MessageWithMeta } from '@/shared/types';
+import { TypingIndicator } from '@/presence/components/TypingIndicator';
+import { MessageList } from '@/messages/components/MessageList';
+import MessageComposer from '@/messages/components/MessageComposer';
+
+interface ChannelViewProps {
+  channel: Channel & { memberCount: number };
+  initialMessages: MessageWithMeta[];
+  dmParticipantName: string | null;
+  currentUserId: string;
+}
+
+/**
+ * Client component for the channel view.
+ * Uses the real MessageList (virtualized), MessageComposer (Tiptap),
+ * and TypingIndicator components.
+ */
+export function ChannelView({
+  channel,
+  initialMessages,
+  dmParticipantName,
+  currentUserId,
+}: ChannelViewProps) {
+  const socket = useSocket();
+  const setCurrentChannel = useAppStore((s) => s.setCurrentChannel);
+  const markChannelRead = useAppStore((s) => s.markChannelRead);
+  const setSidebarOpen = useAppStore((s) => s.setSidebarOpen);
+  const setRightPanelView = useAppStore((s) => s.setRightPanelView);
+
+  const setMessages = useMessagesStore((s) => s.setMessages);
+
+  const [inviteOpen, setInviteOpen] = useState(false);
+
+  const isDM = channel.type === 'DM';
+  const isGroupDM = channel.type === 'GROUP_DM';
+  const displayName = isDM || isGroupDM
+    ? dmParticipantName ?? channel.name
+    : channel.name;
+
+  // Set current channel in store, seed messages store, and join socket room
+  useEffect(() => {
+    setCurrentChannel(channel);
+    setMessages(channel.id, initialMessages);
+    markChannelRead(channel.id);
+
+    socket.emit('channel:join', { channelId: channel.id });
+
+    return () => {
+      socket.emit('channel:leave', { channelId: channel.id });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channel.id]);
+
+  return (
+    <div className="flex flex-1 flex-col h-full">
+      {/* Channel Header */}
+      <header className="flex items-center gap-3 border-b px-4 py-3 shrink-0">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="lg:hidden"
+          onClick={() => setSidebarOpen(true)}
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
+
+        <div className="flex items-center gap-2 min-w-0">
+          {isDM ? null : channel.type === 'PRIVATE' ? (
+            <Lock className="h-4 w-4 text-muted-foreground shrink-0" />
+          ) : (
+            <Hash className="h-4 w-4 text-muted-foreground shrink-0" />
+          )}
+          <h1 className="font-semibold truncate">{displayName}</h1>
+        </div>
+
+        {channel.description && !isDM && (
+          <span className="hidden md:block text-sm text-muted-foreground truncate border-l pl-3 ml-1">
+            {channel.description}
+          </span>
+        )}
+
+        <div className="ml-auto flex items-center gap-2">
+          {!isDM && !isGroupDM && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setInviteOpen(true)}
+              title="Add member"
+            >
+              <UserPlus className="h-4 w-4" />
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setRightPanelView('members')}
+          >
+            <Users className="h-4 w-4" />
+            <span className="hidden sm:inline text-xs">
+              {channel.memberCount}
+            </span>
+          </Button>
+        </div>
+      </header>
+
+      {/* Messages Area — virtualized with react-virtuoso */}
+      <div className="flex-1 min-h-0">
+        <MessageList
+          channelId={channel.id}
+          channelName={channel.name}
+          currentUserId={currentUserId}
+        />
+      </div>
+
+      {/* Typing Indicator */}
+      <TypingIndicator channelId={channel.id} className="px-4 py-1" />
+
+      {/* Message Composer — Tiptap rich text editor */}
+      <div className="border-t shrink-0">
+        <MessageComposer
+          channelId={channel.id}
+          channelName={displayName}
+          workspaceId={channel.workspaceId}
+        />
+      </div>
+
+      {/* Channel Invite Dialog */}
+      {!isDM && !isGroupDM && (
+        <ChannelInviteDialog
+          channelId={channel.id}
+          channelName={channel.name}
+          open={inviteOpen}
+          onOpenChange={setInviteOpen}
+        />
+      )}
+    </div>
+  );
+}
