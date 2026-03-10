@@ -19,6 +19,7 @@ import type {
   ServerToClientEvents,
   SocketData,
 } from '../../shared/types/socket';
+import { getActiveHuddlePayload } from './huddles';
 
 type AppSocket = Socket<
   ClientToServerEvents,
@@ -66,6 +67,12 @@ export function registerChannelHandlers(socket: AppSocket): void {
       const room = channelRoom(channelId);
       socket.join(room);
       console.log(`[channels] User ${userId} joined channel room ${room}`);
+
+      // Send active huddle state if one exists in this channel
+      const huddlePayload = getActiveHuddlePayload(channelId);
+      if (huddlePayload) {
+        socket.emit('huddle:started', huddlePayload);
+      }
 
       // Update lastReadAt to mark the channel as read when the user views it
       try {

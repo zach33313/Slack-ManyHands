@@ -69,6 +69,23 @@ const activeHuddles = new Map<string, HuddleState>();
 const userActiveHuddle = new Map<string, string>();
 
 // ---------------------------------------------------------------------------
+// Public helpers (used by channels.ts for huddle state sync on channel:join)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the active huddle participants for a channel, or null if no huddle.
+ * Used by channel:join to send huddle state to users entering a channel.
+ */
+export function getActiveHuddlePayload(channelId: string) {
+  const huddle = activeHuddles.get(channelId);
+  if (!huddle || huddle.participants.size === 0) return null;
+  return {
+    channelId,
+    participants: Array.from(huddle.participants.values()).map(toPayload),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

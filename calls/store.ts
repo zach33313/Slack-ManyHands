@@ -44,6 +44,7 @@ export const useCallStore = create<CallStoreState>((set, get) => ({
   isScreenSharing: false,
   incomingCall: null,
   huddlesByChannel: {},
+  activeHuddleChannelId: null,
   callHistory: [],
   mediaDevices: defaultMediaDevices,
 
@@ -74,6 +75,9 @@ export const useCallStore = create<CallStoreState>((set, get) => ({
 
   clearIncomingCall: () =>
     set({ incomingCall: null }),
+
+  setActiveHuddleChannelId: (channelId: string | null) =>
+    set({ activeHuddleChannelId: channelId }),
 
   setHuddle: (channelId: string, huddle: HuddleState | null) =>
     set((state) => {

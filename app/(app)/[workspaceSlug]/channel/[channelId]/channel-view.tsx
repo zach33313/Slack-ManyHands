@@ -10,9 +10,13 @@ import {
   Users,
   UserPlus,
   Menu,
+  Phone,
+  Video,
+  Headphones,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ChannelInviteDialog } from '@/channels/components/ChannelInviteDialog';
+import { useCallContext } from '@/calls/components/CallProvider';
 import type { Channel, MessageWithMeta } from '@/shared/types';
 import { TypingIndicator } from '@/presence/components/TypingIndicator';
 import { MessageList } from '@/messages/components/MessageList';
@@ -26,6 +30,7 @@ interface ChannelViewProps {
   channel: Channel & { memberCount: number };
   initialMessages: MessageWithMeta[];
   dmParticipantName: string | null;
+  dmParticipantId?: string | null;
   currentUserId: string;
 }
 
@@ -38,6 +43,7 @@ export function ChannelView({
   channel,
   initialMessages,
   dmParticipantName,
+  dmParticipantId,
   currentUserId,
 }: ChannelViewProps) {
   const socket = useSocket();
@@ -54,6 +60,7 @@ export function ChannelView({
   // Emit channel:mark-read so read receipts update for other participants
   useMarkChannelRead(channel.id, lastMessageId);
 
+  const { startCall, joinHuddle } = useCallContext();
   const [inviteOpen, setInviteOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<ChannelTab>('messages');
 
@@ -106,6 +113,32 @@ export function ChannelView({
         )}
 
         <div className="ml-auto flex items-center gap-2">
+          {/* 1:1 call button (DMs only) */}
+          {isDM && dmParticipantId && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => startCall(dmParticipantId, channel.id, '1:1')}
+              title="Start call"
+            >
+              <Phone className="h-4 w-4" />
+            </Button>
+          )}
+
+          {/* Huddle button (channels and group DMs) */}
+          {!isDM && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => joinHuddle(channel.id)}
+              title="Start or join huddle"
+            >
+              <Headphones className="h-4 w-4" />
+            </Button>
+          )}
+
           {!isDM && !isGroupDM && (
             <Button
               variant="ghost"

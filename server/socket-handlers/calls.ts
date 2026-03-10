@@ -138,8 +138,10 @@ export function registerCallHandlers(socket: AppSocket, io: AppServer): void {
 
   // ─── call:initiate ────────────────────────────────────────────────────────
   socket.on('call:initiate', async ({ channelId, type }) => {
+    console.log(`[calls] call:initiate received from ${userId} for channel ${channelId} (type: ${type})`);
+
     if (userActiveCall.has(userId)) {
-      console.warn(`[calls] ${userId} already in a call — ignoring initiate`);
+      console.warn(`[calls] ${userId} already in a call (${userActiveCall.get(userId)}) — ignoring initiate`);
       return;
     }
 
@@ -148,7 +150,10 @@ export function registerCallHandlers(socket: AppSocket, io: AppServer): void {
         where: { id: userId },
         select: { name: true },
       });
-      if (!caller) return;
+      if (!caller) {
+        console.error(`[calls] Caller user not found in DB: ${userId}`);
+        return;
+      }
 
       const members = await prisma.channelMember.findMany({
         where: { channelId, userId: { not: userId } },
@@ -179,8 +184,12 @@ export function registerCallHandlers(socket: AppSocket, io: AppServer): void {
       activeCalls.set(callId, call);
       userActiveCall.set(userId, callId);
 
+      console.log(`[calls] Emitting call:incoming to ${calleeIds.length} callee(s): ${calleeIds.join(', ')}`);
       for (const calleeId of calleeIds) {
-        io.to(userRoom(calleeId)).emit('call:incoming', {
+        const room = userRoom(calleeId);
+        const roomSockets = io.sockets.adapter.rooms.get(room);
+        console.log(`[calls]   → ${room} (${roomSockets?.size ?? 0} socket(s) in room)`);
+        io.to(room).emit('call:incoming', {
           callId,
           channelId,
           callerId: userId,
@@ -198,7 +207,7 @@ export function registerCallHandlers(socket: AppSocket, io: AppServer): void {
         }
       }, 30_000);
 
-      console.log(`[calls] Call ${callId} initiated by ${userId} in channel ${channelId}`);
+      console.log(`[calls] Call ${callId} initiated by ${userId} (${caller.name}) in channel ${channelId}`);
     } catch (err) {
       console.error('[calls] call:initiate error:', err);
     }

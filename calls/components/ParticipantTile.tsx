@@ -28,10 +28,12 @@ export function ParticipantTile({ participant, isLocal = false, className }: Par
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioLevel = useAudioLevel(participant.stream ?? null);
 
-  // Attach the media stream to the video element
+  // Attach video stream (always muted — audio handled by FloatingCallWindow)
   useEffect(() => {
     if (videoRef.current && participant.stream) {
       videoRef.current.srcObject = participant.stream;
+      videoRef.current.muted = true;
+      videoRef.current.play().catch(() => {});
     }
   }, [participant.stream]);
 
@@ -47,13 +49,13 @@ export function ParticipantTile({ participant, isLocal = false, className }: Par
         className
       )}
     >
-      {/* Video stream */}
+      {/* Video stream (always muted — audio handled by FloatingCallWindow's <audio> elements) */}
       {hasVideo ? (
         <video
           ref={videoRef}
           autoPlay
           playsInline
-          muted={isLocal} // Mute local video to prevent echo
+          muted
           className="h-full w-full object-cover"
         />
       ) : (

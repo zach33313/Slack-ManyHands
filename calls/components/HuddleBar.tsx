@@ -5,6 +5,10 @@
  * Shows participant avatars (max 6), AudioVisualizer, and Join/Leave button.
  * Clicking the bar joins the huddle.
  *
+ * Uses useCallContext() for actions (joinHuddle/leaveHuddle) instead of
+ * calling useHuddle() directly, to avoid creating a duplicate hook instance
+ * (CallProviderInner already mounts useHuddle).
+ *
  * Usage:
  *   <HuddleBar channelId={channelId} />
  */
@@ -14,7 +18,7 @@
 import { motion } from 'framer-motion';
 import { Headphones, LogOut } from 'lucide-react';
 import { useCallStore } from '@/calls/store';
-import { useHuddle } from '@/calls/hooks/useHuddle';
+import { useCallContext } from './CallProvider';
 import { useAudioLevel } from '@/calls/hooks/useAudioLevel';
 import { AudioVisualizer } from './AudioVisualizer';
 import { springSnappy, tapScale } from '@/shared/lib/animations';
@@ -47,13 +51,15 @@ function ParticipantAvatar({ name, image, isMuted }: { name: string; image: stri
 }
 
 export function HuddleBar({ channelId }: HuddleBarProps) {
-  const { joinHuddle, leaveHuddle, isInHuddle, participants } = useHuddle();
+  const { joinHuddle, leaveHuddle } = useCallContext();
   const localStream = useCallStore((s) => s.localStream);
   const huddleState = useCallStore((s) => s.huddlesByChannel[channelId]);
-  const localAudioLevel = useAudioLevel(isInHuddle ? localStream : null);
+  const activeHuddleChannelId = useCallStore((s) => s.activeHuddleChannelId);
+  const isInThisHuddle = activeHuddleChannelId === channelId;
+  const localAudioLevel = useAudioLevel(isInThisHuddle ? localStream : null);
 
   // Show bar only when there is an active huddle in this channel
-  if (!huddleState?.isActive && !isInHuddle) return null;
+  if (!huddleState?.isActive && !isInThisHuddle) return null;
 
   const visibleParticipants = (huddleState?.participants ?? []).slice(0, 6);
   const overflowCount = (huddleState?.participants?.length ?? 0) - 6;
@@ -90,7 +96,7 @@ export function HuddleBar({ channelId }: HuddleBarProps) {
           )}
         </div>
 
-        {isInHuddle && (
+        {isInThisHuddle && (
           <AudioVisualizer
             level={localAudioLevel}
             barCount={5}
@@ -103,18 +109,18 @@ export function HuddleBar({ channelId }: HuddleBarProps) {
 
       {/* Right: Join / Leave button */}
       <motion.button
-        onClick={() => (isInHuddle ? leaveHuddle() : joinHuddle(channelId))}
+        onClick={() => (isInThisHuddle ? leaveHuddle() : joinHuddle(channelId))}
         whileHover={{ scale: 1.04 }}
         whileTap={tapScale}
         transition={springSnappy}
         className={cn(
           'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold',
-          isInHuddle
+          isInThisHuddle
             ? 'bg-red-600/20 text-red-400 hover:bg-red-600/30'
             : 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
         )}
       >
-        {isInHuddle ? (
+        {isInThisHuddle ? (
           <>
             <LogOut className="h-3.5 w-3.5" />
             Leave

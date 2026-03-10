@@ -6,13 +6,17 @@
  * CallControls bar at bottom. CallTimer in corner.
  * Minimize button collapses to a small PiP bubble (64x64).
  *
+ * Audio is decoupled from video: hidden <audio> elements handle remote audio
+ * playback (inside the motion.div so AnimatePresence still works), while
+ * <video> elements are always muted and only display video.
+ *
  * Usage:
  *   <FloatingCallWindow onHangup={hangup} onToggleMute={...} ... />
  */
 
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Minimize2, Maximize2, PhoneOff } from 'lucide-react';
 import { useCallStore } from '@/calls/store';
@@ -23,6 +27,18 @@ import { ScreenShareView } from './ScreenShareView';
 import { springGentle, tapScale } from '@/shared/lib/animations';
 import type { CallParticipant } from '@/calls/types';
 import { useSession } from 'next-auth/react';
+
+/** Hidden audio element for remote audio playback */
+function RemoteAudio({ stream }: { stream: MediaStream }) {
+  const ref = useRef<HTMLAudioElement>(null);
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.srcObject = stream;
+      ref.current.play().catch(() => {});
+    }
+  }, [stream]);
+  return <audio ref={ref} autoPlay playsInline />;
+}
 
 interface FloatingCallWindowProps {
   onHangup: () => void;
@@ -74,6 +90,12 @@ export function FloatingCallWindow({
       }
     : undefined;
 
+  // Hidden audio elements for all remote participants — rendered inside the
+  // motion.div so AnimatePresence can still track this component properly
+  const remoteAudioElements = activeCall.participants
+    .filter((p) => p.stream)
+    .map((p) => <RemoteAudio key={`audio-${p.userId}`} stream={p.stream!} />);
+
   // PiP bubble (minimized state)
   if (minimized) {
     return (
@@ -86,6 +108,9 @@ export function FloatingCallWindow({
         transition={springGentle}
         className="fixed bottom-20 right-6 z-50 cursor-move touch-none select-none"
       >
+        {/* Audio elements (invisible, persists in minimized mode) */}
+        {remoteAudioElements}
+
         <div className="relative flex h-16 w-16 items-center justify-center rounded-full bg-zinc-800 shadow-2xl ring-2 ring-zinc-700">
           {/* Timer */}
           {activeCall.status === 'connected' && (
@@ -131,6 +156,9 @@ export function FloatingCallWindow({
       className="fixed bottom-20 right-6 z-50 flex cursor-move touch-none select-none flex-col overflow-hidden rounded-2xl bg-zinc-900 shadow-2xl"
       style={{ width: 340, height: showVideo ? 380 : 160 }}
     >
+      {/* Audio elements (invisible, persists across all visual modes) */}
+      {remoteAudioElements}
+
       {/* Header bar */}
       <div className="flex items-center justify-between px-3 py-2">
         <div className="flex items-center gap-2">

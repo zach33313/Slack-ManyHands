@@ -3,10 +3,19 @@
 import { useEffect, type ReactNode } from 'react';
 import { getSocket, disconnectSocket } from '@/shared/lib/socket-client';
 import { useAppStore } from '@/store';
+import { useCallStore } from '@/calls/store';
 import { useMessagesStore } from '@/messages/store';
 import { usePresenceStore } from '@/presence/store';
 import { usePresence } from '@/presence/hooks/usePresence';
 import { useCelebrationReactions } from '@/shared/hooks/useCelebrationReactions';
+import type {
+  HuddleStartedPayload,
+  HuddleUserJoinedPayload,
+  HuddleUserLeftPayload,
+  HuddleEndedPayload,
+  HuddleParticipant,
+} from '@/shared/types/socket';
+import type { CallParticipant } from '@/calls/types';
 
 /**
  * SocketProvider connects the Socket.IO client on mount and registers
@@ -117,6 +126,81 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       );
     };
 
+    // ─── Global huddle events (for spectators — shows HuddleBar to non-participants) ───
+    // useHuddle() only handles events for the channel the user has joined;
+    // these handlers update the store so HuddleBar is visible to all channel members.
+
+    const toCallParticipant = (p: HuddleParticipant): CallParticipant => ({
+      userId: p.userId,
+      user: p.user,
+      status: 'joining',
+      isMuted: p.isMuted,
+      isCameraOn: p.isCameraOn,
+      isScreenSharing: false,
+      audioLevel: 0,
+      joinedAt: p.joinedAt instanceof Date ? p.joinedAt : new Date(p.joinedAt),
+      stream: null,
+    });
+
+    const handleHuddleStarted = ({ channelId, participants }: HuddleStartedPayload) => {
+      // Only update if user is NOT the active participant (useHuddle handles that)
+      const activeChannel = useCallStore.getState().activeHuddleChannelId;
+      if (activeChannel === channelId) return;
+
+      useCallStore.getState().setHuddle(channelId, {
+        channelId,
+        participants: participants.map(toCallParticipant),
+        startedAt: new Date(),
+        isActive: true,
+      });
+    };
+
+    const handleHuddleUserJoined = ({ channelId, participant }: HuddleUserJoinedPayload) => {
+      const activeChannel = useCallStore.getState().activeHuddleChannelId;
+      if (activeChannel === channelId) return;
+
+      const huddle = useCallStore.getState().huddlesByChannel[channelId];
+      if (huddle) {
+        const alreadyIn = huddle.participants.some((p) => p.userId === participant.userId);
+        if (!alreadyIn) {
+          useCallStore.getState().setHuddle(channelId, {
+            ...huddle,
+            participants: [...huddle.participants, toCallParticipant(participant)],
+          });
+        }
+      } else {
+        // Huddle wasn't tracked yet — create it
+        useCallStore.getState().setHuddle(channelId, {
+          channelId,
+          participants: [toCallParticipant(participant)],
+          startedAt: new Date(),
+          isActive: true,
+        });
+      }
+    };
+
+    const handleHuddleUserLeft = ({ channelId, userId }: HuddleUserLeftPayload) => {
+      const activeChannel = useCallStore.getState().activeHuddleChannelId;
+      if (activeChannel === channelId) return;
+
+      const huddle = useCallStore.getState().huddlesByChannel[channelId];
+      if (huddle) {
+        const remaining = huddle.participants.filter((p) => p.userId !== userId);
+        if (remaining.length === 0) {
+          useCallStore.getState().setHuddle(channelId, null);
+        } else {
+          useCallStore.getState().setHuddle(channelId, { ...huddle, participants: remaining });
+        }
+      }
+    };
+
+    const handleHuddleEnded = ({ channelId }: HuddleEndedPayload) => {
+      const activeChannel = useCallStore.getState().activeHuddleChannelId;
+      if (activeChannel === channelId) return;
+
+      useCallStore.getState().setHuddle(channelId, null);
+    };
+
     socket.on('presence:update', handlePresenceUpdate);
     socket.on('typing:users', handleTypingUsers);
     socket.on('message:new', handleNewMessage);
@@ -127,6 +211,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socket.on('channel:created', handleChannelCreated);
     socket.on('channel:updated', handleChannelUpdated);
     socket.on('dm:participants', handleDmParticipants);
+    socket.on('huddle:started', handleHuddleStarted);
+    socket.on('huddle:user-joined', handleHuddleUserJoined);
+    socket.on('huddle:user-left', handleHuddleUserLeft);
+    socket.on('huddle:ended', handleHuddleEnded);
 
     return () => {
       socket.off('presence:update', handlePresenceUpdate);
@@ -139,6 +227,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('channel:created', handleChannelCreated);
       socket.off('channel:updated', handleChannelUpdated);
       socket.off('dm:participants', handleDmParticipants);
+      socket.off('huddle:started', handleHuddleStarted);
+      socket.off('huddle:user-joined', handleHuddleUserJoined);
+      socket.off('huddle:user-left', handleHuddleUserLeft);
+      socket.off('huddle:ended', handleHuddleEnded);
     };
   }, [
     setPresence,

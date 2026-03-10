@@ -3,6 +3,7 @@ import { Inter } from 'next/font/google';
 import { Toaster } from 'sonner';
 import { ThemeProvider } from '@/components/providers/theme-provider';
 import { MotionProvider } from '@/components/providers/motion-provider';
+import { AuthProvider } from '@/components/providers/auth-provider';
 import './globals.css';
 
 const inter = Inter({ subsets: ['latin'] });
@@ -20,17 +21,19 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="dark"
-          enableSystem
-          disableTransitionOnChange
-        >
-          <MotionProvider>
-            {children}
-          </MotionProvider>
-          <Toaster richColors position="bottom-right" />
-        </ThemeProvider>
+        <AuthProvider>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="dark"
+            enableSystem
+            disableTransitionOnChange
+          >
+            <MotionProvider>
+              {children}
+            </MotionProvider>
+            <Toaster richColors position="bottom-right" />
+          </ThemeProvider>
+        </AuthProvider>
       </body>
     </html>
   );

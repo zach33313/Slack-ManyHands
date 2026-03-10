@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+
+# TLS certificates
+certs/
 .pnp
 .pnp.js
 .yarn/install-state.gz

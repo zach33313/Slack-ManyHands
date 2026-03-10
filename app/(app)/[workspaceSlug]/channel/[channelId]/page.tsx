@@ -137,6 +137,7 @@ export default async function ChannelPage({ params }: ChannelPageProps) {
 
   // For DM channels, fetch participant info
   let dmParticipantName: string | null = null;
+  let dmParticipantId: string | null = null;
   if (channel.type === 'DM') {
     const otherMember = await prisma.channelMember.findFirst({
       where: {
@@ -144,10 +145,11 @@ export default async function ChannelPage({ params }: ChannelPageProps) {
         userId: { not: session.user.id },
       },
       include: {
-        user: { select: { name: true } },
+        user: { select: { id: true, name: true } },
       },
     });
     dmParticipantName = otherMember?.user?.name ?? null;
+    dmParticipantId = otherMember?.user?.id ?? null;
   }
 
   return (
@@ -155,6 +157,7 @@ export default async function ChannelPage({ params }: ChannelPageProps) {
       channel={serializedChannel}
       initialMessages={initialMessages}
       dmParticipantName={dmParticipantName}
+      dmParticipantId={dmParticipantId}
       currentUserId={session.user.id}
     />
   );

@@ -53,7 +53,9 @@ export function registerHandlers(io: AppServer): void {
 
     // Join the user's personal room for user-specific events
     // (notifications, DM pings, etc.)
-    socket.join(userRoom(userId));
+    const room = userRoom(userId);
+    socket.join(room);
+    console.log(`[socket] User ${userId} joined room: ${room}`);
 
     // Register all domain event handlers
     registerChannelHandlers(socket);

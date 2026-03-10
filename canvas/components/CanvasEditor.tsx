@@ -160,6 +160,7 @@ export function CanvasEditor({ channelId, currentUserId, currentUserName }: Canv
         // Inject Yjs sync when fragment is ready
         ...(yjsFragment ? [createYjsExtension(yjsFragment)] : []),
       ],
+      immediatelyRender: false,
       editorProps: {
         attributes: {
           class:

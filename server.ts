@@ -1,21 +1,25 @@
 /**
  * server.ts
  *
- * Custom HTTP server entry point that integrates Next.js with Socket.IO.
+ * Custom HTTP/HTTPS server entry point that integrates Next.js with Socket.IO.
  *
- * Creates a single http.Server that handles:
+ * Creates a single server that handles:
  * - All Next.js page/API requests via the Next.js request handler
  * - Socket.IO WebSocket/polling connections on the /socket.io path
  *
- * This same-origin approach means NextAuth session cookies are sent
- * automatically on Socket.IO handshakes — no CORS or manual token passing.
+ * If certs/key.pem and certs/cert.pem exist, the server runs over HTTPS
+ * (required for WebRTC mediaDevices on non-localhost origins).
+ * Otherwise falls back to plain HTTP.
  *
  * Usage:
  *   Development: tsx watch server.ts
  *   Production:  node dist/server/server.js
  */
 
-import { createServer } from 'http';
+import { createServer as createHttpServer } from 'http';
+import { createServer as createHttpsServer } from 'https';
+import { readFileSync, existsSync } from 'fs';
+import { resolve } from 'path';
 import { parse } from 'url';
 import next from 'next';
 import { Server as SocketIOServer } from 'socket.io';
@@ -44,19 +48,36 @@ const dev = process.env.NODE_ENV !== 'production';
 const app = next({ dev });
 const handle = app.getRequestHandler();
 
+// Check for TLS certificates
+const certPath = resolve(__dirname, 'certs/cert.pem');
+const keyPath = resolve(__dirname, 'certs/key.pem');
+const hasSSL = existsSync(certPath) && existsSync(keyPath);
+
 app.prepare().then(() => {
-  const httpServer = createServer((req, res) => {
+  const handler = (req: any, res: any) => {
     const parsedUrl = parse(req.url!, true);
     handle(req, res, parsedUrl);
-  });
+  };
 
-  // Create typed Socket.IO server on the same HTTP server
+  const server = hasSSL
+    ? createHttpsServer(
+        {
+          key: readFileSync(keyPath),
+          cert: readFileSync(certPath),
+        },
+        handler
+      )
+    : createHttpServer(handler);
+
+  const protocol = hasSSL ? 'https' : 'http';
+
+  // Create typed Socket.IO server on the same HTTP/HTTPS server
   const io = new SocketIOServer<
     ClientToServerEvents,
     ServerToClientEvents,
     Record<string, never>,
     SocketData
-  >(httpServer, {
+  >(server, {
     // Same origin — CORS disabled for same-port setup
     cors: undefined,
     // Connection timeouts
@@ -78,9 +99,14 @@ app.prepare().then(() => {
   startScheduledMessagesCron();
 
   const hostname = process.env.HOSTNAME || '0.0.0.0';
-  httpServer.listen(port, hostname, () => {
+  server.listen(port, hostname, () => {
     console.log(
-      `> Server listening on ${hostname}:${port} (${dev ? 'development' : 'production'})`
+      `> Server listening on ${protocol}://${hostname}:${port} (${dev ? 'development' : 'production'})`
     );
+    if (hasSSL) {
+      console.log('> TLS enabled — loaded certs from certs/');
+    } else {
+      console.log('> TLS disabled — mediaDevices (calls) only works on localhost');
+    }
   });
 });

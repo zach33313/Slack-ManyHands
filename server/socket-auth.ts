@@ -44,13 +44,15 @@ export function applyAuthMiddleware(io: AppServer): void {
         cookies?: Record<string, string>;
       };
 
-      // NextAuth v5 cookie name depends on environment
-      // Development (HTTP): authjs.session-token
-      // Production (HTTPS): __Secure-authjs.session-token
-      const cookieName =
-        process.env.NODE_ENV === 'production'
-          ? '__Secure-authjs.session-token'
-          : 'authjs.session-token';
+      // NextAuth v5 cookie name depends on whether AUTH_URL uses HTTPS.
+      // HTTPS (including dev with self-signed certs): __Secure-authjs.session-token
+      // HTTP (plain localhost dev): authjs.session-token
+      const isSecure =
+        process.env.NODE_ENV === 'production' ||
+        process.env.AUTH_URL?.startsWith('https');
+      const cookieName = isSecure
+        ? '__Secure-authjs.session-token'
+        : 'authjs.session-token';
 
       // Parse cookies from the raw Cookie header if not already parsed
       if (!req.cookies) {

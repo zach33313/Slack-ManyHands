@@ -120,6 +120,8 @@ export interface CallStoreState {
   incomingCall: IncomingCallInfo | null;
   /** Huddle state keyed by channelId */
   huddlesByChannel: Record<string, HuddleState>;
+  /** Channel ID of the huddle the current user is in (null if not in any) */
+  activeHuddleChannelId: string | null;
   /** Recent call history */
   callHistory: CallHistoryEntry[];
   /** Available media devices and selections */
@@ -135,6 +137,7 @@ export interface CallStoreState {
   setIncomingCall: (incoming: IncomingCallInfo | null) => void;
   clearIncomingCall: () => void;
   setHuddle: (channelId: string, huddle: HuddleState | null) => void;
+  setActiveHuddleChannelId: (channelId: string | null) => void;
   addToCallHistory: (entry: CallHistoryEntry) => void;
   updateParticipant: (userId: string, updates: Partial<CallParticipant>) => void;
   updateHuddleParticipant: (channelId: string, userId: string, updates: Partial<CallParticipant>) => void;

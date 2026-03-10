@@ -35,6 +35,7 @@ import {
   emitCallSignal,
   emitCallToggleMedia,
 } from '@/calls/lib/signaling';
+import { toast } from 'sonner';
 
 const STUN_CONFIG: RTCConfiguration = {
   iceServers: [
@@ -53,6 +54,12 @@ export interface UseCallReturn {
 
 /** Acquires local camera+mic or mic-only for voice calls */
 async function getUserMedia(type: CallType): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error(
+      'Camera/microphone access requires a secure connection (HTTPS or localhost). ' +
+      'If accessing over LAN, use https:// or open localhost:3000 directly.'
+    );
+  }
   return navigator.mediaDevices.getUserMedia({
     audio: true,
     video:
@@ -82,7 +89,19 @@ export function useCall(): UseCallReturn {
   const { data: session } = useSession();
   const myUserId = session?.user?.id ?? '';
 
-  const store = useCallStore();
+  // Use individual stable action selectors instead of useCallStore() (which
+  // subscribes to the entire store and causes unnecessary re-renders / effect re-runs)
+  const setIncomingCall = useCallStore((s) => s.setIncomingCall);
+  const clearIncomingCall = useCallStore((s) => s.clearIncomingCall);
+  const setLocalStream = useCallStore((s) => s.setLocalStream);
+  const setScreenStream = useCallStore((s) => s.setScreenStream);
+  const setActiveCall = useCallStore((s) => s.setActiveCall);
+  const toggleMute = useCallStore((s) => s.toggleMute);
+  const toggleCamera = useCallStore((s) => s.toggleCamera);
+  const toggleScreenShareAction = useCallStore((s) => s.toggleScreenShare);
+  const updateParticipant = useCallStore((s) => s.updateParticipant);
+  const addToCallHistory = useCallStore((s) => s.addToCallHistory);
+
   const peerRef = useRef<SimplePeer.Instance | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
@@ -101,16 +120,16 @@ export function useCall(): UseCallReturn {
     // Stop local media
     localStreamRef.current?.getTracks().forEach((t) => t.stop());
     localStreamRef.current = null;
-    store.setLocalStream(null);
+    setLocalStream(null);
     // Stop screen share
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     screenStreamRef.current = null;
-    store.setScreenStream(null);
+    setScreenStream(null);
     // Reset store flags
-    if (store.isScreenSharing) store.toggleScreenShare();
-    store.setActiveCall(null);
+    if (useCallStore.getState().isScreenSharing) toggleScreenShareAction();
+    setActiveCall(null);
     activeCallIdRef.current = null;
-  }, [store]);
+  }, [setLocalStream, setScreenStream, setActiveCall, toggleScreenShareAction]);
 
   // ---------------------------------------------------------------------------
   // Wire events on a SimplePeer instance
@@ -123,13 +142,13 @@ export function useCall(): UseCallReturn {
       });
 
       peer.on('stream', (remoteStream: MediaStream) => {
-        store.updateParticipant(remoteUserId, { stream: remoteStream, status: 'connected' });
+        updateParticipant(remoteUserId, { stream: remoteStream, status: 'connected' });
       });
 
       peer.on('connect', () => {
         const current = useCallStore.getState().activeCall;
         if (current) {
-          store.setActiveCall({ ...current, status: 'connected' });
+          setActiveCall({ ...current, status: 'connected' });
         }
       });
 
@@ -146,7 +165,7 @@ export function useCall(): UseCallReturn {
         }
       });
     },
-    [socket, store, cleanupCall]
+    [socket, updateParticipant, setActiveCall, cleanupCall]
   );
 
   // ---------------------------------------------------------------------------
@@ -154,8 +173,11 @@ export function useCall(): UseCallReturn {
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
+    console.log('[useCall] Registering call event listeners (socket connected:', socket.connected, ')');
+
     const onIncoming = (payload: CallIncomingPayload) => {
-      store.setIncomingCall({
+      console.log('[useCall] call:incoming received:', payload);
+      setIncomingCall({
         callId: payload.callId,
         channelId: payload.channelId,
         callerId: payload.callerId,
@@ -164,9 +186,18 @@ export function useCall(): UseCallReturn {
       });
     };
 
-    // Fired on the INITIATOR's side when callee accepts
+    // Fired on the INITIATOR's side when callee accepts.
+    // The server broadcasts call:accepted to all participants, so the callee
+    // receives it too — skip if we're the callee (we already set up our peer
+    // in acceptCall()). The initiator has a 'pending_' call ID prefix.
     const onAccepted = async ({ callId, userId }: CallAcceptedPayload) => {
-      // Update call ID from the pending placeholder
+      if (!activeCallIdRef.current?.startsWith('pending_')) {
+        // We're the callee — already have a peer from acceptCall(), just
+        // update our call ID to the real one and move on.
+        return;
+      }
+
+      // We're the initiator — create the peer and start WebRTC negotiation
       activeCallIdRef.current = callId;
 
       const localStream = localStreamRef.current;
@@ -183,10 +214,10 @@ export function useCall(): UseCallReturn {
 
       const current = useCallStore.getState().activeCall;
       if (current) {
-        store.setActiveCall({
+        setActiveCall({
           ...current,
           id: callId,
-          status: 'ringing',
+          status: 'connecting',
           participants: [buildParticipant(userId)],
         });
       }
@@ -195,7 +226,7 @@ export function useCall(): UseCallReturn {
     const onDeclined = ({ callId }: CallDeclinedPayload) => {
       const current = useCallStore.getState().activeCall;
       if (current) {
-        store.addToCallHistory({
+        addToCallHistory({
           callId,
           channelId: current.channelId,
           type: current.type,
@@ -219,7 +250,7 @@ export function useCall(): UseCallReturn {
       const current = useCallStore.getState().activeCall;
       if (current) {
         const durationMs = current.startedAt ? Date.now() - current.startedAt.getTime() : 0;
-        store.addToCallHistory({
+        addToCallHistory({
           callId,
           channelId: current.channelId,
           type: current.type,
@@ -235,7 +266,7 @@ export function useCall(): UseCallReturn {
 
     const onMediaToggled = ({ callId, userId, isMuted, isCameraOn }: CallMediaToggledPayload) => {
       if (callId !== activeCallIdRef.current) return;
-      store.updateParticipant(userId, { isMuted, isCameraOn });
+      updateParticipant(userId, { isMuted, isCameraOn });
     };
 
     socket.on('call:incoming', onIncoming);
@@ -246,6 +277,7 @@ export function useCall(): UseCallReturn {
     socket.on('call:media-toggled', onMediaToggled);
 
     return () => {
+      console.log('[useCall] Cleaning up call event listeners');
       socket.off('call:incoming', onIncoming);
       socket.off('call:accepted', onAccepted);
       socket.off('call:declined', onDeclined);
@@ -253,7 +285,7 @@ export function useCall(): UseCallReturn {
       socket.off('call:ended', onEnded);
       socket.off('call:media-toggled', onMediaToggled);
     };
-  }, [socket, store, cleanupCall, wirePeerEvents]);
+  }, [socket, setIncomingCall, setActiveCall, addToCallHistory, updateParticipant, cleanupCall, wirePeerEvents]);
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -261,19 +293,21 @@ export function useCall(): UseCallReturn {
 
   const startCall = useCallback(
     async (targetUserId: string, channelId: string, type: CallType) => {
+      console.log('[useCall] startCall:', { targetUserId, channelId, type, socketConnected: socket.connected });
       try {
         const localStream = await getUserMedia(type);
         localStreamRef.current = localStream;
-        store.setLocalStream(localStream);
+        setLocalStream(localStream);
 
         // Emit — server assigns callId and notifies callee
+        console.log('[useCall] Emitting call:initiate to server');
         emitCallInitiate(socket, channelId, type);
 
         // Set a temporary call ID; updated to real ID when call:accepted fires
         const tempId = `pending_${Date.now()}`;
         activeCallIdRef.current = tempId;
 
-        store.setActiveCall({
+        setActiveCall({
           id: tempId,
           channelId,
           type,
@@ -287,10 +321,12 @@ export function useCall(): UseCallReturn {
         });
       } catch (err) {
         console.error('[useCall] startCall failed:', err);
+        const msg = err instanceof Error ? err.message : 'Failed to start call';
+        toast.error(msg);
         cleanupCall();
       }
     },
-    [socket, store, myUserId, cleanupCall]
+    [socket, setLocalStream, setActiveCall, myUserId, cleanupCall]
   );
 
   const acceptCall = useCallback(
@@ -301,7 +337,7 @@ export function useCall(): UseCallReturn {
       try {
         const localStream = await getUserMedia(incoming.type);
         localStreamRef.current = localStream;
-        store.setLocalStream(localStream);
+        setLocalStream(localStream);
 
         activeCallIdRef.current = callId;
 
@@ -317,7 +353,7 @@ export function useCall(): UseCallReturn {
 
         emitCallAccept(socket, callId);
 
-        store.setActiveCall({
+        setActiveCall({
           id: callId,
           channelId: incoming.channelId,
           type: incoming.type,
@@ -329,21 +365,23 @@ export function useCall(): UseCallReturn {
           isScreenSharing: false,
           screenSharingUserId: null,
         });
-        store.clearIncomingCall();
+        clearIncomingCall();
       } catch (err) {
         console.error('[useCall] acceptCall failed:', err);
+        const msg = err instanceof Error ? err.message : 'Failed to accept call';
+        toast.error(msg);
         cleanupCall();
       }
     },
-    [socket, store, cleanupCall, wirePeerEvents]
+    [socket, setLocalStream, setActiveCall, clearIncomingCall, cleanupCall, wirePeerEvents]
   );
 
   const declineCall = useCallback(
     (callId: string) => {
       emitCallDecline(socket, callId);
-      store.clearIncomingCall();
+      clearIncomingCall();
     },
-    [socket, store]
+    [socket, clearIncomingCall]
   );
 
   const hangup = useCallback(() => {
@@ -356,7 +394,7 @@ export function useCall(): UseCallReturn {
 
     if (current) {
       const durationMs = current.startedAt ? Date.now() - current.startedAt.getTime() : 0;
-      store.addToCallHistory({
+      addToCallHistory({
         callId: current.id,
         channelId: current.channelId,
         type: current.type,
@@ -369,7 +407,7 @@ export function useCall(): UseCallReturn {
     }
 
     cleanupCall();
-  }, [socket, store, cleanupCall]);
+  }, [socket, addToCallHistory, cleanupCall]);
 
   const toggleMedia = useCallback(
     async (mediaType: 'audio' | 'video' | 'screen') => {
@@ -378,7 +416,7 @@ export function useCall(): UseCallReturn {
 
       if (mediaType === 'audio') {
         const newMuted = !state.isMuted;
-        store.toggleMute();
+        toggleMute();
         localStreamRef.current?.getAudioTracks().forEach((t) => {
           t.enabled = !newMuted;
         });
@@ -387,7 +425,7 @@ export function useCall(): UseCallReturn {
         }
       } else if (mediaType === 'video') {
         const newCameraOn = !state.isCameraOn;
-        store.toggleCamera();
+        toggleCamera();
         localStreamRef.current?.getVideoTracks().forEach((t) => {
           t.enabled = newCameraOn;
         });
@@ -398,7 +436,7 @@ export function useCall(): UseCallReturn {
         await handleScreenShare(state);
       }
     },
-    [socket, store] // eslint-disable-line react-hooks/exhaustive-deps
+    [socket, toggleMute, toggleCamera] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   // ---------------------------------------------------------------------------
@@ -414,8 +452,8 @@ export function useCall(): UseCallReturn {
         });
 
         screenStreamRef.current = screenStream;
-        store.setScreenStream(screenStream);
-        store.toggleScreenShare();
+        setScreenStream(screenStream);
+        toggleScreenShareAction();
 
         const screenTrack = screenStream.getVideoTracks()[0];
 
@@ -453,9 +491,9 @@ export function useCall(): UseCallReturn {
     }
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     screenStreamRef.current = null;
-    store.setScreenStream(null);
+    setScreenStream(null);
     const currentState = useCallStore.getState();
-    if (currentState.isScreenSharing) store.toggleScreenShare();
+    if (currentState.isScreenSharing) toggleScreenShareAction();
   }
 
   return { startCall, acceptCall, declineCall, hangup, toggleMedia };

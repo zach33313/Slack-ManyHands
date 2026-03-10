@@ -23,10 +23,16 @@ import {
   Settings,
   Users,
   ChevronDown,
+  Phone,
+  Video,
+  Headphones,
 } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
 import { ChannelType } from '@/shared/types';
 import { updateChannel } from '@/channels/actions';
+import { useCallContext } from '@/calls/components/CallProvider';
+import { useCallStore } from '@/calls/store';
+import { useAppStore } from '@/store';
 
 interface ChannelHeaderProps {
   channelId: string;

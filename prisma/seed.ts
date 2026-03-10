@@ -6,13 +6,13 @@
  * Or via:   npx prisma db seed
  *
  * Creates:
- *   - 2 demo users (alice@test.com, bob@test.com) with bcrypt-hashed passwords
- *   - 1 workspace ("Acme Corp", slug: "acme")
- *   - Both users as workspace members (Alice=OWNER, Bob=MEMBER)
- *   - 3 channels (#general PUBLIC, #random PUBLIC, #secret PRIVATE)
+ *   - 6 demo users with bcrypt-hashed passwords
+ *   - 1 workspace ("MakeHands", slug: "makehands")
+ *   - All users as workspace members
+ *   - 3 channels (#general PUBLIC, #random PUBLIC, #engineering PRIVATE)
  *   - Channel memberships
- *   - 10 sample messages in #general
- *   - 2 thread replies on the first message
+ *   - Sample messages in #general
+ *   - Thread replies
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -56,14 +56,73 @@ async function main() {
   // Users
   // -------------------------------------------------------------------------
 
-  const passwordHash = hashSync('password123', 10);
+  const passwordHash = hashSync('password', 10);
+
+  const gray = await prisma.user.create({
+    data: {
+      name: 'Gray',
+      email: 'gray@demo.com',
+      password: passwordHash,
+      title: 'Co-Founder',
+      statusText: 'Shipping features',
+      statusEmoji: '⚡',
+      timezone: 'America/Los_Angeles',
+    },
+  });
+
+  const zach = await prisma.user.create({
+    data: {
+      name: 'Zach',
+      email: 'zach@demo.com',
+      password: passwordHash,
+      title: 'Co-Founder',
+      statusText: 'Building things',
+      statusEmoji: '🛠️',
+      timezone: 'America/Los_Angeles',
+    },
+  });
+
+  const conor = await prisma.user.create({
+    data: {
+      name: 'Conor',
+      email: 'conor@demo.com',
+      password: passwordHash,
+      title: 'Engineer',
+      statusText: 'In the zone',
+      statusEmoji: '🎯',
+      timezone: 'America/New_York',
+    },
+  });
+
+  const amaey = await prisma.user.create({
+    data: {
+      name: 'Amaey',
+      email: 'amaey@demo.com',
+      password: passwordHash,
+      title: 'Engineer',
+      statusText: 'Reviewing PRs',
+      statusEmoji: '👀',
+      timezone: 'America/New_York',
+    },
+  });
+
+  const leo = await prisma.user.create({
+    data: {
+      name: 'Leo',
+      email: 'leo@demo.com',
+      password: passwordHash,
+      title: 'Engineer',
+      statusText: 'Heads down',
+      statusEmoji: '💻',
+      timezone: 'America/Los_Angeles',
+    },
+  });
 
   const alice = await prisma.user.create({
     data: {
       name: 'Alice Johnson',
       email: 'alice@test.com',
       password: passwordHash,
-      image: null,
       title: 'Engineering Lead',
       statusText: 'Building cool things',
       statusEmoji: '🚀',
@@ -76,7 +135,6 @@ async function main() {
       name: 'Bob Smith',
       email: 'bob@test.com',
       password: passwordHash,
-      image: null,
       title: 'Frontend Developer',
       statusText: 'In a meeting',
       statusEmoji: '📅',
@@ -84,7 +142,9 @@ async function main() {
     },
   });
 
-  console.log(`  Created users: ${alice.name}, ${bob.name}`);
+  const allUsers = [gray, zach, conor, amaey, leo, alice, bob];
+
+  console.log(`  Created users: ${allUsers.map(u => u.name).join(', ')}`);
 
   // -------------------------------------------------------------------------
   // Workspace
@@ -92,9 +152,9 @@ async function main() {
 
   const workspace = await prisma.workspace.create({
     data: {
-      name: 'Acme Corp',
-      slug: 'acme',
-      ownerId: alice.id,
+      name: 'MakeHands',
+      slug: 'makehands',
+      ownerId: zach.id,
     },
   });
 
@@ -105,22 +165,16 @@ async function main() {
   // -------------------------------------------------------------------------
 
   await prisma.workspaceMember.create({
-    data: {
-      workspaceId: workspace.id,
-      userId: alice.id,
-      role: 'OWNER',
-    },
+    data: { workspaceId: workspace.id, userId: zach.id, role: 'OWNER' },
   });
 
-  await prisma.workspaceMember.create({
-    data: {
-      workspaceId: workspace.id,
-      userId: bob.id,
-      role: 'MEMBER',
-    },
-  });
+  for (const user of [gray, conor, amaey, alice, bob]) {
+    await prisma.workspaceMember.create({
+      data: { workspaceId: workspace.id, userId: user.id, role: 'MEMBER' },
+    });
+  }
 
-  console.log('  Added workspace members: Alice (OWNER), Bob (MEMBER)');
+  console.log('  Added all users as workspace members (Zach=OWNER, rest=MEMBER)');
 
   // -------------------------------------------------------------------------
   // Channels
@@ -132,7 +186,7 @@ async function main() {
       name: 'general',
       description: 'Company-wide announcements and general discussion',
       type: 'PUBLIC',
-      createdById: alice.id,
+      createdById: gray.id,
     },
   });
 
@@ -142,70 +196,65 @@ async function main() {
       name: 'random',
       description: 'Non-work banter and water cooler chat',
       type: 'PUBLIC',
-      createdById: alice.id,
+      createdById: gray.id,
     },
   });
 
-  const secret = await prisma.channel.create({
+  const engineering = await prisma.channel.create({
     data: {
       workspaceId: workspace.id,
-      name: 'secret',
-      description: 'Private channel for leadership team',
+      name: 'engineering',
+      description: 'Engineering team discussions',
       type: 'PRIVATE',
-      createdById: alice.id,
+      createdById: zach.id,
     },
   });
 
-  console.log(`  Created channels: #${general.name}, #${random.name}, #${secret.name}`);
+  console.log(`  Created channels: #${general.name}, #${random.name}, #${engineering.name}`);
 
   // -------------------------------------------------------------------------
   // Channel Members
   // -------------------------------------------------------------------------
 
-  // Both users in #general and #random
+  // All users in #general and #random
   for (const channel of [general, random]) {
-    for (const user of [alice, bob]) {
+    for (const user of allUsers) {
       await prisma.channelMember.create({
-        data: {
-          channelId: channel.id,
-          userId: user.id,
-        },
+        data: { channelId: channel.id, userId: user.id },
       });
     }
   }
 
-  // Only Alice in #secret
-  await prisma.channelMember.create({
-    data: {
-      channelId: secret.id,
-      userId: alice.id,
-    },
-  });
+  // Engineering: gray, zach, conor, amaey
+  for (const user of [gray, zach, conor, amaey, leo]) {
+    await prisma.channelMember.create({
+      data: { channelId: engineering.id, userId: user.id },
+    });
+  }
 
   console.log('  Added channel memberships');
 
   // -------------------------------------------------------------------------
-  // 10 Messages in #general
+  // Messages in #general
   // -------------------------------------------------------------------------
 
   const messageTexts = [
-    { userId: alice.id, text: 'Welcome to the Acme Corp workspace! 👋' },
-    { userId: bob.id, text: "Thanks Alice! Excited to be here." },
-    { userId: alice.id, text: "Let's use this channel for general announcements." },
-    { userId: bob.id, text: 'Sounds good. Where should I post project updates?' },
-    { userId: alice.id, text: 'You can create a new channel for your project or post here.' },
-    { userId: bob.id, text: "I'll create a #frontend channel later." },
-    { userId: alice.id, text: 'Perfect. Also check out #random for casual chat.' },
-    { userId: bob.id, text: 'Already joined it! 😄' },
-    { userId: alice.id, text: "Great! Let me know if you need anything else." },
-    { userId: bob.id, text: 'Will do. Looking forward to working together!' },
+    { userId: gray.id, text: 'Welcome to MakeHands! 👋 Excited to get this going.' },
+    { userId: zach.id, text: 'Let\'s gooo. First order of business: ship the MVP.' },
+    { userId: conor.id, text: 'On it. PR is up for the auth flow.' },
+    { userId: amaey.id, text: 'Just joined! What should I start on?' },
+    { userId: gray.id, text: '@amaey check out the open issues, lots of good first tasks.' },
+    { userId: zach.id, text: 'Also the video calling feature needs some love.' },
+    { userId: alice.id, text: 'Hey everyone! Happy to be here 🎉' },
+    { userId: bob.id, text: 'Same! Looking forward to contributing.' },
+    { userId: conor.id, text: 'Welcome aboard! Feel free to ask anything in here.' },
+    { userId: gray.id, text: 'Great to have the full team together. Let\'s build something awesome.' },
   ];
 
   const messages: Array<{ id: string }> = [];
 
   for (let i = 0; i < messageTexts.length; i++) {
     const { userId, text } = messageTexts[i];
-    // Space messages 5 minutes apart
     const createdAt = new Date(Date.now() - (messageTexts.length - i) * 5 * 60 * 1000);
 
     const message = await prisma.message.create({
@@ -224,7 +273,7 @@ async function main() {
   console.log(`  Created ${messages.length} messages in #general`);
 
   // -------------------------------------------------------------------------
-  // 2 Thread replies on the first message
+  // Thread replies on the first message
   // -------------------------------------------------------------------------
 
   const firstMessage = messages[0];
@@ -232,9 +281,9 @@ async function main() {
   await prisma.message.create({
     data: {
       channelId: general.id,
-      userId: bob.id,
-      contentJson: tiptapDoc('Thanks for the warm welcome! 🎉'),
-      contentPlain: 'Thanks for the warm welcome! 🎉',
+      userId: zach.id,
+      contentJson: tiptapDoc('LFG 🚀'),
+      contentPlain: 'LFG 🚀',
       parentId: firstMessage.id,
       createdAt: new Date(Date.now() - 40 * 60 * 1000),
     },
@@ -243,15 +292,14 @@ async function main() {
   await prisma.message.create({
     data: {
       channelId: general.id,
-      userId: alice.id,
-      contentJson: tiptapDoc('Happy to have you on the team, Bob!'),
-      contentPlain: 'Happy to have you on the team, Bob!',
+      userId: conor.id,
+      contentJson: tiptapDoc('Hyped to be part of this!'),
+      contentPlain: 'Hyped to be part of this!',
       parentId: firstMessage.id,
       createdAt: new Date(Date.now() - 35 * 60 * 1000),
     },
   });
 
-  // Update reply count on parent message
   await prisma.message.update({
     where: { id: firstMessage.id },
     data: { replyCount: 2 },
@@ -260,9 +308,14 @@ async function main() {
   console.log('  Created 2 thread replies on the first message');
 
   console.log('\nSeed complete!');
-  console.log('\nDemo accounts:');
-  console.log('  alice@test.com / password123');
-  console.log('  bob@test.com   / password123');
+  console.log('\nDemo accounts (all passwords: "password"):');
+  console.log('  gray@demo.com');
+  console.log('  zach@demo.com');
+  console.log('  conor@demo.com');
+  console.log('  amaey@demo.com');
+  console.log('  leo@demo.com');
+  console.log('  alice@test.com');
+  console.log('  bob@test.com');
 }
 
 main()

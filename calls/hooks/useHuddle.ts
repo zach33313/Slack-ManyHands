@@ -35,6 +35,7 @@ import {
   emitHuddleSignal,
   emitHuddleToggleMedia,
 } from '@/calls/lib/signaling';
+import { toast } from 'sonner';
 
 const MAX_HUDDLE_PARTICIPANTS = 6;
 
@@ -63,20 +64,6 @@ function buildParticipant(p: HuddleParticipant): CallParticipant {
   };
 }
 
-function buildSkeletonParticipant(userId: string): CallParticipant {
-  return {
-    userId,
-    user: { id: userId, name: userId, image: null },
-    status: 'joining',
-    isMuted: false,
-    isCameraOn: false,
-    isScreenSharing: false,
-    audioLevel: 0,
-    joinedAt: new Date(),
-    stream: null,
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Hook types
 // ---------------------------------------------------------------------------
@@ -100,7 +87,13 @@ export function useHuddle(): UseHuddleReturn {
   const { data: session } = useSession();
   const myUserId = session?.user?.id ?? '';
 
-  const store = useCallStore();
+  // Stable action selectors (never change between renders)
+  const setLocalStream = useCallStore((s) => s.setLocalStream);
+  const setHuddle = useCallStore((s) => s.setHuddle);
+  const setActiveHuddleChannelId = useCallStore((s) => s.setActiveHuddleChannelId);
+  const updateHuddleParticipant = useCallStore((s) => s.updateHuddleParticipant);
+  const toggleMute = useCallStore((s) => s.toggleMute);
+  const toggleCamera = useCallStore((s) => s.toggleCamera);
 
   // Map of remoteUserId → SimplePeer instance
   const peersRef = useRef<Map<string, SimplePeer.Instance>>(new Map());
@@ -108,7 +101,6 @@ export function useHuddle(): UseHuddleReturn {
   const currentChannelRef = useRef<string | null>(null);
 
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
-  const [isInHuddle, setIsInHuddle] = useState(false);
 
   // ---------------------------------------------------------------------------
   // leaveHuddle — defined first so joinHuddle can call it
@@ -127,14 +119,14 @@ export function useHuddle(): UseHuddleReturn {
     // Stop local stream
     localStreamRef.current?.getTracks().forEach((t) => t.stop());
     localStreamRef.current = null;
-    store.setLocalStream(null);
+    setLocalStream(null);
 
     setRemoteStreams(new Map());
-    setIsInHuddle(false);
+    setActiveHuddleChannelId(null);
     currentChannelRef.current = null;
 
-    store.setHuddle(channelId, null);
-  }, [socket, store]);
+    setHuddle(channelId, null);
+  }, [socket, setLocalStream, setHuddle, setActiveHuddleChannelId]);
 
   // ---------------------------------------------------------------------------
   // createPeerForUser — creates/manages a peer connection to one remote user
@@ -149,6 +141,8 @@ export function useHuddle(): UseHuddleReturn {
 
       // Lower userId acts as initiator to prevent double-offer race condition
       const initiator = myUserId < remoteUserId;
+
+      console.log(`[useHuddle] Creating peer for ${remoteUserId} (initiator: ${initiator})`);
 
       const peer = new SimplePeer({
         initiator,
@@ -167,11 +161,12 @@ export function useHuddle(): UseHuddleReturn {
           next.set(remoteUserId, stream);
           return next;
         });
-        store.updateHuddleParticipant(channelId, remoteUserId, { stream, status: 'connected' });
+        updateHuddleParticipant(channelId, remoteUserId, { stream, status: 'connected' });
       });
 
       peer.on('connect', () => {
-        store.updateHuddleParticipant(channelId, remoteUserId, { status: 'connected' });
+        console.log(`[useHuddle] Connected to ${remoteUserId}`);
+        updateHuddleParticipant(channelId, remoteUserId, { status: 'connected' });
       });
 
       peer.on('error', (err: Error) => {
@@ -191,7 +186,7 @@ export function useHuddle(): UseHuddleReturn {
 
       peersRef.current.set(remoteUserId, peer);
     },
-    [socket, store, myUserId]
+    [socket, updateHuddleParticipant, myUserId]
   );
 
   // ---------------------------------------------------------------------------
@@ -208,16 +203,22 @@ export function useHuddle(): UseHuddleReturn {
       }
 
       try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error(
+            'Microphone access requires a secure connection (HTTPS or localhost).'
+          );
+        }
+
         // Huddles are audio-only by default
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         localStreamRef.current = stream;
-        store.setLocalStream(stream);
+        setLocalStream(stream);
         currentChannelRef.current = channelId;
 
         emitHuddleJoin(socket, channelId);
-        setIsInHuddle(true);
+        setActiveHuddleChannelId(channelId);
 
-        store.setHuddle(channelId, {
+        setHuddle(channelId, {
           channelId,
           participants: [],
           startedAt: new Date(),
@@ -225,9 +226,11 @@ export function useHuddle(): UseHuddleReturn {
         });
       } catch (err) {
         console.error('[useHuddle] joinHuddle failed:', err);
+        const msg = err instanceof Error ? err.message : 'Failed to join huddle';
+        toast.error(msg);
       }
     },
-    [socket, store, leaveHuddle]
+    [socket, setLocalStream, setHuddle, leaveHuddle]
   );
 
   // ---------------------------------------------------------------------------
@@ -235,11 +238,14 @@ export function useHuddle(): UseHuddleReturn {
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
+    console.log('[useHuddle] Registering huddle event listeners');
+
     const onStarted = ({ channelId, participants }: HuddleStartedPayload) => {
       if (channelId !== currentChannelRef.current) return;
-      const existing = store.huddlesByChannel[channelId];
+      // Read current state fresh (not from stale closure)
+      const existing = useCallStore.getState().huddlesByChannel[channelId];
       if (existing) {
-        store.setHuddle(channelId, { ...existing, participants: participants.map(buildParticipant) });
+        setHuddle(channelId, { ...existing, participants: participants.map(buildParticipant) });
       }
     };
 
@@ -247,8 +253,8 @@ export function useHuddle(): UseHuddleReturn {
       if (channelId !== currentChannelRef.current) return;
 
       const callParticipants = participants.map(buildParticipant);
-      const existing = store.huddlesByChannel[channelId];
-      store.setHuddle(channelId, {
+      const existing = useCallStore.getState().huddlesByChannel[channelId];
+      setHuddle(channelId, {
         channelId,
         participants: callParticipants,
         startedAt: existing?.startedAt ?? new Date(),
@@ -267,12 +273,12 @@ export function useHuddle(): UseHuddleReturn {
       if (channelId !== currentChannelRef.current) return;
       if (participant.userId === myUserId) return;
 
-      // Add to huddle state
-      const huddle = store.huddlesByChannel[channelId];
+      // Read current state fresh
+      const huddle = useCallStore.getState().huddlesByChannel[channelId];
       if (huddle) {
         const alreadyIn = huddle.participants.some((p) => p.userId === participant.userId);
         if (!alreadyIn) {
-          store.setHuddle(channelId, {
+          setHuddle(channelId, {
             ...huddle,
             participants: [...huddle.participants, buildParticipant(participant)],
           });
@@ -280,7 +286,8 @@ export function useHuddle(): UseHuddleReturn {
       }
 
       // Enforce max participant limit
-      const participantCount = (store.huddlesByChannel[channelId]?.participants ?? []).length;
+      const currentHuddle = useCallStore.getState().huddlesByChannel[channelId];
+      const participantCount = currentHuddle?.participants?.length ?? 0;
       if (participantCount > MAX_HUDDLE_PARTICIPANTS) {
         return;
       }
@@ -303,9 +310,9 @@ export function useHuddle(): UseHuddleReturn {
         return next;
       });
 
-      const huddle = store.huddlesByChannel[channelId];
+      const huddle = useCallStore.getState().huddlesByChannel[channelId];
       if (huddle) {
-        store.setHuddle(channelId, {
+        setHuddle(channelId, {
           ...huddle,
           participants: huddle.participants.filter((p) => p.userId !== userId),
         });
@@ -319,11 +326,12 @@ export function useHuddle(): UseHuddleReturn {
       if (peer) {
         peer.signal(signal as SimplePeer.SignalData);
       } else if (localStreamRef.current) {
-        // Peer not yet created — create it then signal
+        // Peer not yet created — create it then signal on next tick
         createPeerForUser(fromUserId, channelId);
-        setTimeout(() => {
+        // Use queueMicrotask so the peer is in peersRef before we signal
+        queueMicrotask(() => {
           peersRef.current.get(fromUserId)?.signal(signal as SimplePeer.SignalData);
-        }, 0);
+        });
       }
     };
 
@@ -333,7 +341,7 @@ export function useHuddle(): UseHuddleReturn {
       isMuted,
       isCameraOn,
     }: HuddleMediaToggledPayload) => {
-      store.updateHuddleParticipant(channelId, userId, { isMuted, isCameraOn });
+      updateHuddleParticipant(channelId, userId, { isMuted, isCameraOn });
     };
 
     const onEnded = ({ channelId }: HuddleEndedPayload) => {
@@ -350,6 +358,7 @@ export function useHuddle(): UseHuddleReturn {
     socket.on('huddle:ended', onEnded);
 
     return () => {
+      console.log('[useHuddle] Cleaning up huddle event listeners');
       socket.off('huddle:started', onStarted);
       socket.off('huddle:participants', onParticipants);
       socket.off('huddle:user-joined', onUserJoined);
@@ -358,7 +367,7 @@ export function useHuddle(): UseHuddleReturn {
       socket.off('huddle:media-toggled', onMediaToggled);
       socket.off('huddle:ended', onEnded);
     };
-  }, [socket, store, createPeerForUser, myUserId, leaveHuddle]);
+  }, [socket, setHuddle, updateHuddleParticipant, createPeerForUser, myUserId, leaveHuddle]);
 
   // ---------------------------------------------------------------------------
   // Media toggles
@@ -368,29 +377,34 @@ export function useHuddle(): UseHuddleReturn {
     const channelId = currentChannelRef.current;
     if (!channelId || !localStreamRef.current) return;
 
-    const newMuted = !store.isMuted;
-    store.toggleMute();
+    const state = useCallStore.getState();
+    const newMuted = !state.isMuted;
+    toggleMute();
     localStreamRef.current.getAudioTracks().forEach((t) => {
       t.enabled = !newMuted;
     });
-    emitHuddleToggleMedia(socket, channelId, newMuted, store.isCameraOn);
-  }, [socket, store]);
+    emitHuddleToggleMedia(socket, channelId, newMuted, state.isCameraOn);
+  }, [socket, toggleMute]);
 
   const toggleVideo = useCallback(() => {
     const channelId = currentChannelRef.current;
     if (!channelId || !localStreamRef.current) return;
 
-    const newCameraOn = !store.isCameraOn;
-    store.toggleCamera();
+    const state = useCallStore.getState();
+    const newCameraOn = !state.isCameraOn;
+    toggleCamera();
     localStreamRef.current.getVideoTracks().forEach((t) => {
       t.enabled = newCameraOn;
     });
-    emitHuddleToggleMedia(socket, channelId, store.isMuted, newCameraOn);
-  }, [socket, store]);
+    emitHuddleToggleMedia(socket, channelId, state.isMuted, newCameraOn);
+  }, [socket, toggleCamera]);
 
-  // Derive participants from store for the current channel
-  const participants = currentChannelRef.current
-    ? (store.huddlesByChannel[currentChannelRef.current]?.participants ?? [])
+  // Derive from store
+  const activeHuddleChannelId = useCallStore((s) => s.activeHuddleChannelId);
+  const huddlesByChannel = useCallStore((s) => s.huddlesByChannel);
+  const isInHuddle = activeHuddleChannelId !== null;
+  const participants = activeHuddleChannelId
+    ? (huddlesByChannel[activeHuddleChannelId]?.participants ?? [])
     : [];
 
   return {
