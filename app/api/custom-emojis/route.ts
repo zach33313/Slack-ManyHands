@@ -23,6 +23,7 @@ import { requireAuth, AuthError } from '@/auth/middleware';
 import { ok, err } from '@/shared/types/api';
 import { prisma } from '@/shared/lib/prisma';
 import { getMemberRole } from '@/workspaces/queries';
+import { IS_DEMO, demoBlock } from '@/shared/lib/demo';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -223,6 +224,7 @@ export async function GET(request: NextRequest) {
  *   6. Return the created emoji object
  */
 export async function POST(request: NextRequest) {
+  if (IS_DEMO) return demoBlock('Custom emoji uploads');
   try {
     const session = await requireAuth();
 

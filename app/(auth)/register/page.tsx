@@ -18,6 +18,8 @@ import {
 } from '@/components/ui/card';
 import { Loader2 } from 'lucide-react';
 
+const IS_DEMO = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
 const registerSchema = z
   .object({
     name: z.string().min(1, 'Name is required').max(100, 'Name is too long'),
@@ -42,6 +44,52 @@ export default function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
+
+  async function handleDemoSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+
+    if (!name.trim()) {
+      setError('Please enter a display name');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      // Create demo account with just a name
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), demo: true }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || 'Failed to join');
+        return;
+      }
+
+      // Auto sign-in with the demo password
+      const signInRes = await signIn('credentials', {
+        email: data.user.email,
+        password: data.demoPassword,
+        redirect: false,
+      });
+
+      if (signInRes?.error) {
+        setError('Sign-in failed. Please try again.');
+        return;
+      }
+
+      router.push('/');
+      router.refresh();
+    } catch {
+      setError('Something went wrong. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -111,6 +159,66 @@ export default function RegisterPage() {
     }
   }
 
+  // Demo mode: simple name-only entry
+  if (IS_DEMO) {
+    return (
+      <Card>
+        <CardHeader className="text-center">
+          <CardTitle className="text-xl">Welcome to the ManyHands Slack Demo</CardTitle>
+          <CardDescription>
+            Pick a display name to start chatting
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleDemoSubmit} className="space-y-4">
+            {error && (
+              <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {error}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="name">Display Name</Label>
+              <Input
+                id="name"
+                type="text"
+                placeholder="What should we call you?"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                disabled={isLoading}
+                autoComplete="off"
+                autoFocus
+              />
+            </div>
+
+            <Button type="submit" className="w-full" disabled={isLoading}>
+              {isLoading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Joining...
+                </>
+              ) : (
+                'Join the demo'
+              )}
+            </Button>
+          </form>
+        </CardContent>
+        <CardFooter className="justify-center">
+          <p className="text-sm text-muted-foreground">
+            Admin?{' '}
+            <Link
+              href="/login"
+              className="font-medium text-primary hover:underline"
+            >
+              Sign in
+            </Link>
+          </p>
+        </CardFooter>
+      </Card>
+    );
+  }
+
+  // Normal mode: full registration form
   return (
     <Card>
       <CardHeader className="text-center">

@@ -18,6 +18,8 @@ import { SchedulePicker } from '@/scheduling/components/SchedulePicker'
 import { AudioRecorder } from './AudioRecorder'
 import type { TenorGif } from '@/gifs/types'
 
+const IS_DEMO = process.env.NEXT_PUBLIC_DEMO_MODE === 'true'
+
 interface PendingFile {
   file: File
   id: string
@@ -596,8 +598,8 @@ export default function MessageComposer({
           placeholder={placeholderText}
           disabled={disabled}
           workspaceId={workspaceId}
-          onFileUpload={handleFileUpload}
-          onGifClick={() => setShowGifPicker((prev) => !prev)}
+          onFileUpload={IS_DEMO ? undefined : handleFileUpload}
+          onGifClick={IS_DEMO ? undefined : () => setShowGifPicker((prev) => !prev)}
           onScheduleClick={handleScheduleClick}
           extraToolbarButtons={
             <AudioRecorder onSend={handleAudioSend} />

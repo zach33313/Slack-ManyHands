@@ -14,6 +14,8 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { auth } from '@/auth/auth';
 
+const IS_DEMO = process.env.DEMO_MODE === 'true';
+
 export default auth((req) => {
   const { pathname } = req.nextUrl;
 
@@ -32,9 +34,11 @@ export default auth((req) => {
 
   // For all other routes, require authentication
   if (!req.auth) {
-    const loginUrl = new URL('/login', req.url);
-    loginUrl.searchParams.set('callbackUrl', pathname);
-    return NextResponse.redirect(loginUrl);
+    // In demo mode, send unauthenticated users to the name picker (/register)
+    const authPage = IS_DEMO ? '/register' : '/login';
+    const authUrl = new URL(authPage, req.url);
+    authUrl.searchParams.set('callbackUrl', pathname);
+    return NextResponse.redirect(authUrl);
   }
 
   return NextResponse.next();

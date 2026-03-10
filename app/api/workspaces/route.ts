@@ -14,6 +14,7 @@ import { ok, err } from '@/shared/types/api';
 import { listUserWorkspaces } from '@/workspaces/queries';
 import { createWorkspace } from '@/workspaces/actions';
 import { MAX_WORKSPACE_NAME_LENGTH } from '@/shared/lib/constants';
+import { IS_DEMO, demoBlock } from '@/shared/lib/demo';
 
 const createWorkspaceSchema = z.object({
   name: z.string().min(1, 'Name is required').max(MAX_WORKSPACE_NAME_LENGTH),
@@ -51,6 +52,7 @@ export async function GET() {
  * Creates a new workspace. Request body is validated with Zod.
  */
 export async function POST(request: NextRequest) {
+  if (IS_DEMO) return demoBlock('Workspace creation');
   try {
     await requireAuth();
 

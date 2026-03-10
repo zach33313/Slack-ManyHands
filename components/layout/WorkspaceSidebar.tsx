@@ -92,18 +92,20 @@ export function WorkspaceSidebar() {
           })}
         </div>
 
-        {/* Create workspace button */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              className="flex h-10 w-10 items-center justify-center rounded-xl bg-muted hover:bg-muted/80 hover:rounded-lg text-muted-foreground hover:text-foreground transition-all"
-              onClick={() => setCreatorOpen(true)}
-            >
-              <Plus className="h-5 w-5" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">Create workspace</TooltipContent>
-        </Tooltip>
+        {/* Create workspace button — hidden in demo mode */}
+        {process.env.NEXT_PUBLIC_DEMO_MODE !== 'true' && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                className="flex h-10 w-10 items-center justify-center rounded-xl bg-muted hover:bg-muted/80 hover:rounded-lg text-muted-foreground hover:text-foreground transition-all"
+                onClick={() => setCreatorOpen(true)}
+              >
+                <Plus className="h-5 w-5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Create workspace</TooltipContent>
+          </Tooltip>
+        )}
       </div>
 
       <WorkspaceCreator open={creatorOpen} onOpenChange={setCreatorOpen} />

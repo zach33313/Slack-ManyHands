@@ -15,6 +15,7 @@ import { ChannelType } from '@/shared/types';
 import { listWorkspaceChannels } from '@/channels/queries';
 import { createChannel } from '@/channels/actions';
 import { z } from 'zod';
+import { IS_DEMO, demoBlock } from '@/shared/lib/demo';
 
 const CreateChannelSchema = z.object({
   name: z
@@ -83,6 +84,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ workspaceId: string }> }
 ) {
+  if (IS_DEMO) return demoBlock('Channel creation');
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json(

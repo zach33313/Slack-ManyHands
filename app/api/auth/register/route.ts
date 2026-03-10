@@ -20,6 +20,9 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { hashSync } from 'bcryptjs';
 import { prisma } from '@/shared/lib/prisma';
+import { IS_DEMO } from '@/shared/lib/demo';
+
+const DEMO_PASSWORD = 'password123123';
 
 const registerSchema = z.object({
   name: z
@@ -42,6 +45,47 @@ const registerSchema = z.object({
 export async function POST(req: Request) {
   try {
     const body = await req.json();
+
+    // Demo mode: name-only signup — create user with random email + default password
+    if (IS_DEMO && body.demo) {
+      const name = (body.name || '').trim();
+      if (!name || name.length > 100) {
+        return NextResponse.json(
+          { ok: false, error: 'Please enter a display name (1-100 characters)', code: 'VALIDATION_ERROR' },
+          { status: 400 }
+        );
+      }
+      const demoEmail = `demo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@demo.local`;
+      const hashedPw = hashSync(DEMO_PASSWORD, 10);
+
+      const user = await prisma.user.create({
+        data: { name, email: demoEmail, password: hashedPw },
+        select: { id: true, name: true, email: true },
+      });
+
+      // Auto-join first workspace + public channels
+      try {
+        const defaultWorkspace = await prisma.workspace.findFirst({ orderBy: { createdAt: 'asc' } });
+        if (defaultWorkspace) {
+          await prisma.workspaceMember.create({
+            data: { workspaceId: defaultWorkspace.id, userId: user.id, role: 'MEMBER' },
+          });
+          const publicChannels = await prisma.channel.findMany({
+            where: { workspaceId: defaultWorkspace.id, type: 'PUBLIC', isArchived: false },
+          });
+          for (const channel of publicChannels) {
+            await prisma.channelMember.create({
+              data: { channelId: channel.id, userId: user.id },
+            });
+          }
+        }
+      } catch { /* don't fail signup if auto-join fails */ }
+
+      return NextResponse.json(
+        { ok: true, user, demoPassword: DEMO_PASSWORD },
+        { status: 201 }
+      );
+    }
 
     // Validate input
     const result = registerSchema.safeParse(body);

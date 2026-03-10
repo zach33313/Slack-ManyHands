@@ -14,8 +14,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ok, err } from '@/shared/types/api';
 import { uploadFile } from '@/files/actions';
 import { FileValidationError } from '@/files/storage';
+import { IS_DEMO, demoBlock } from '@/shared/lib/demo';
 
 export async function POST(request: NextRequest) {
+  if (IS_DEMO) return demoBlock('File uploads');
   try {
     const contentType = request.headers.get('content-type') || '';
     if (!contentType.includes('multipart/form-data')) {

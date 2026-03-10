@@ -318,13 +318,15 @@ export function ChannelSidebar() {
             isOpen={channelsOpen}
             onToggle={() => setChannelsOpen(!channelsOpen)}
             action={
-              <button
-                className="opacity-0 group-hover/section:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted"
-                title="Create channel"
-                onClick={() => setChannelCreatorOpen(true)}
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
+              process.env.NEXT_PUBLIC_DEMO_MODE !== 'true' ? (
+                <button
+                  className="opacity-0 group-hover/section:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted"
+                  title="Create channel"
+                  onClick={() => setChannelCreatorOpen(true)}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              ) : undefined
             }
           >
             {regularChannels.map((ch) => (
