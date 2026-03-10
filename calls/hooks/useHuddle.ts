@@ -36,15 +36,9 @@ import {
   emitHuddleToggleMedia,
 } from '@/calls/lib/signaling';
 import { toast } from 'sonner';
+import { ICE_CONFIG } from '@/calls/lib/iceConfig';
 
 const MAX_HUDDLE_PARTICIPANTS = 6;
-
-const STUN_CONFIG: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-  ],
-};
 
 // ---------------------------------------------------------------------------
 // Helpers (module-level — no closures over component state)
@@ -148,7 +142,7 @@ export function useHuddle(): UseHuddleReturn {
         initiator,
         trickle: true,
         stream: localStream,
-        config: STUN_CONFIG,
+        config: ICE_CONFIG,
       });
 
       peer.on('signal', (signal: SimplePeer.SignalData) => {

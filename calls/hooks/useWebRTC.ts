@@ -17,14 +17,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import SimplePeer from 'simple-peer';
-
-/** STUN server configuration for ICE candidate gathering */
-const STUN_CONFIG: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-  ],
-};
+import { ICE_CONFIG } from '@/calls/lib/iceConfig';
 
 export interface UseWebRTCConfig {
   /** Whether this end creates the WebRTC offer (true for caller) */
@@ -72,7 +65,7 @@ export function useWebRTC(config: UseWebRTCConfig): UseWebRTCReturn {
       initiator: config.initiator,
       trickle: true,
       stream: config.stream,
-      config: STUN_CONFIG,
+      config: ICE_CONFIG,
     });
 
     peer.on('signal', (data: SimplePeer.SignalData) => {

@@ -213,6 +213,41 @@ info "Seeding database (skips if data exists)..."
 npx prisma db seed
 ok "Seed complete"
 
+# --- TURN Server (coturn) — optional, for cross-network calls ---
+#
+# Voice/video calls use WebRTC peer-to-peer connections. On the same LAN this
+# works with STUN alone, but across different networks (symmetric NAT, cellular,
+# corporate firewalls) you need a TURN relay server.
+#
+# Quick coturn setup (Ubuntu/Debian):
+#
+#   sudo apt install coturn
+#   sudo systemctl enable coturn
+#
+#   # Edit /etc/turnserver.conf:
+#   listening-port=3478
+#   tls-listening-port=5349
+#   realm=your-domain.com
+#   server-name=your-domain.com
+#   # Static credentials (simple setup):
+#   lt-cred-mech
+#   user=slackturn:changeme
+#   # Or use a shared secret for time-limited credentials:
+#   # use-auth-secret
+#   # static-auth-secret=your-secret-here
+#
+#   sudo systemctl restart coturn
+#
+# Then set in your .env:
+#   NEXT_PUBLIC_TURN_URL="turn:your-domain.com:3478"
+#   NEXT_PUBLIC_TURN_USERNAME="slackturn"
+#   NEXT_PUBLIC_TURN_CREDENTIAL="changeme"
+#
+# For TLS (recommended in production):
+#   NEXT_PUBLIC_TURN_URL="turns:your-domain.com:5349"
+#
+# Test with: turnutils_uclient -T -u slackturn -w changeme your-domain.com
+
 # --- Step 5: Start dev server ---
 
 # Detect LAN IP for display only

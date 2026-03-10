@@ -36,13 +36,7 @@ import {
   emitCallToggleMedia,
 } from '@/calls/lib/signaling';
 import { toast } from 'sonner';
-
-const STUN_CONFIG: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-  ],
-};
+import { ICE_CONFIG } from '@/calls/lib/iceConfig';
 
 export interface UseCallReturn {
   startCall: (targetUserId: string, channelId: string, type: CallType) => Promise<void>;
@@ -207,7 +201,7 @@ export function useCall(): UseCallReturn {
         initiator: true,
         trickle: true,
         stream: localStream,
-        config: STUN_CONFIG,
+        config: ICE_CONFIG,
       });
       wirePeerEvents(peer, callId, userId);
       peerRef.current = peer;
@@ -346,7 +340,7 @@ export function useCall(): UseCallReturn {
           initiator: false,
           trickle: true,
           stream: localStream,
-          config: STUN_CONFIG,
+          config: ICE_CONFIG,
         });
         wirePeerEvents(peer, callId, incoming.callerId);
         peerRef.current = peer;
