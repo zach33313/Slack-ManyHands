@@ -431,14 +431,14 @@ export function MessageItem({
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
-        {/* Compact timestamp on hover */}
-        <div className="flex items-start">
-          <div className="w-[52px] shrink-0 pt-0.5 text-right">
+        {/* Compact: same layout as full mode (avatar-width spacer + gap-2) so text aligns */}
+        <div className="flex items-start gap-2">
+          <div className="w-9 shrink-0 pt-0.5 text-center">
             <span className="hidden text-[10px] text-muted-foreground group-hover:inline" title={absoluteTime}>
               {format(createdAt, 'h:mm a')}
             </span>
           </div>
-          <div className="min-w-0 flex-1 pl-2">
+          <div className="min-w-0 flex-1">
             {isEditing ? (
               <TiptapEditInput
                 initialContent={message.content ?? ({ type: 'doc', content: [] } as TiptapJSON)}
