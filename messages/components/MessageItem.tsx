@@ -433,9 +433,9 @@ export function MessageItem({
       >
         {/* Compact: same layout as full mode (avatar-width spacer + gap-2) so text aligns */}
         <div className="flex items-start gap-2">
-          <div className="w-10 shrink-0 pt-0.5 text-center">
-            <span className="hidden text-[10px] leading-tight text-muted-foreground group-hover:inline" title={absoluteTime}>
-              {format(createdAt, 'h:mm')}
+          <div className="w-11 shrink-0 pt-0.5 text-center">
+            <span className="hidden text-[10px] text-muted-foreground group-hover:inline" title={absoluteTime}>
+              {format(createdAt, 'h:mm a')}
             </span>
           </div>
           <div className="min-w-0 flex-1">
@@ -533,7 +533,7 @@ export function MessageItem({
     >
       <div className="flex items-start gap-2">
         {/* Avatar */}
-        <div className="shrink-0 pt-0.5">
+        <div className="w-11 shrink-0 pt-0.5 flex justify-center">
           <UserAvatar user={message.author} size="md" showPresence />
         </div>
 
